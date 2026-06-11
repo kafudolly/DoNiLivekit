@@ -81,6 +81,45 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     outline: none;
 }
 
+/* =========================================
+   新增：焦点视图 (Focus/Pin) 的状态机 CSS
+   ========================================= */
+
+/* 当容器进入“焦点模式”时，改变其内部对齐方式 */
+#video-container.has-focus {
+    align-content: flex-start;
+    /* 给底部留点空间放缩略图 */
+    padding-bottom: 20px; 
+}
+
+/* 🌟 核心：被单击选中的那个视频，变身主屏幕 */
+.video-wrapper.focused {
+    flex: 1 1 100%;
+    max-width: 100%;
+    /* 占据可用高度的 75%，剩下的留给底部缩略图 */
+    max-height: calc(100vh - 280px); 
+    order: -1; /* 绝对排在最前面 */
+    z-index: 10;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.8);
+    border: 2px solid #5865f2; /* 加一个尊贵的蓝框高亮 */
+}
+
+/* 🌟 核心：当有视频被聚焦时，其他没被聚焦的视频，乖乖变成缩略图 */
+#video-container.has-focus .video-wrapper:not(.focused) {
+    flex: 0 0 240px; /* 固定宽度 240px */
+    max-width: 240px;
+    height: 135px;   /* 标准 16:9 比例缩略图 */
+    max-height: 135px;
+    order: 1;        /* 排在主屏幕后面 */
+    opacity: 0.6;    /* 稍微变暗，突出主次 */
+}
+
+/* 鼠标悬浮在缩略图上时变亮 */
+#video-container.has-focus .video-wrapper:not(.focused):hover {
+    opacity: 1;
+    transform: translateY(-4px);
+}
+
 /* 🌟 新增：名字标签的悬浮样式 🌟 */
 .video-name-label {
     position: absolute;
@@ -172,20 +211,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     background-color: #000;
 }
 
-/* 底部控制台与设备选择区 */
-#controls-bar { min-height: 80px; background-color: #2b2d31; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 12px; padding: 10px 20px; border-top: 1px solid #1e1f22; flex-shrink: 0; }
-.mic-control-group { display: flex; align-items: center; flex-wrap: nowrap; background-color: #313338; border-radius: 24px; padding: 4px 12px; gap: 10px; min-width: 0; }
-select { background-color: #1e1f22; color: #dbdee1; border: 1px solid #1e1f22; padding: 8px 10px; border-radius: 12px; outline: none; font-size: 13px; max-width: 180px; cursor: pointer; transition: border-color 0.2s; white-space: nowrap; flex-shrink: 0; }
-select:hover:not(:disabled) { border-color: #5865F2; }
-select:disabled { cursor: not-allowed; opacity: 0.5; }
-.action-btn { display: flex; align-items: center; justify-content: center; gap: 8px; background-color: #313338; color: #dbdee1; border: none; padding: 12px 24px; border-radius: 24px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s ease; white-space: nowrap; flex-shrink: 0; }
-.action-btn span { white-space: nowrap; }
-.action-btn:hover:not(:disabled) { background-color: #404249; color: white; }
-.action-btn.active { background-color: #f23f42; color: white; }
-.mic-control-group .action-btn { background-color: transparent; padding: 8px 12px; }
-.mic-control-group .action-btn:hover:not(:disabled) { background-color: #404249; }
-.mic-control-group .action-btn.active { background-color: #f23f42; }
-
 .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 200; }
 .modal.hidden { display: none; }
 .modal-card { width: min(720px, 92vw); max-height: 78vh; background: #2b2d31; border: 1px solid #3b3d44; border-radius: 12px; box-shadow: 0 20px 40px rgba(0,0,0,0.45); display: flex; flex-direction: column; overflow: hidden; }
@@ -203,9 +228,6 @@ select:disabled { cursor: not-allowed; opacity: 0.5; }
 .modal-empty { color: #80848e; font-size: 13px; text-align: center; padding: 24px; }
 .modal-footer { display: flex; justify-content: flex-end; padding: 12px 16px; border-top: 1px solid #3b3d44; }
 
-@media (max-width: 1200px) {
-    #controls-bar { justify-content: flex-start; }
-}
 
 #audio-container { display: none; }
 
@@ -223,3 +245,175 @@ select:disabled { cursor: not-allowed; opacity: 0.5; }
 #btn-send { background-color: #5865F2; border: none; color: white; border-radius: 6px; padding: 0 15px; cursor: pointer; font-weight: bold; font-size: 13px; transition: background 0.2s; }
 #btn-send:hover:not(:disabled) { background-color: #4752c4; }
 #btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.vad-container { margin-top: 15px; padding: 15px; background: #1e1f22; border-radius: 8px; border: 1px solid #3b3d44; }
+.vad-header { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #b5bac1; margin-bottom: 12px; font-weight: 600; }
+.vad-track-wrapper { position: relative; height: 16px; background: #313338; border-radius: 8px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.5); }
+.vad-fill-bar { height: 100%; width: 0%; background: #23a559; border-radius: 8px; transition: width 0.05s linear; }
+.vad-threshold-marker { position: absolute; top: -2px; bottom: -2px; width: 3px; background: #faa61a; box-shadow: 0 0 6px #faa61a; z-index: 2; pointer-events: none; }
+.vad-slider-input { position: absolute; top: -4px; left: 0; width: 100%; height: 24px; margin: 0; -webkit-appearance: none; background: transparent; z-index: 3; cursor: pointer; }
+.vad-slider-input::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 24px; background: #ffffff; border: 1px solid #1e1f22; border-radius: 3px; box-shadow: 0 2px 5px rgba(0,0,0,0.6); }
+
+/* =========================================
+   🎮 左下角个人控制坞 (Discord 稳定版)
+   ========================================= */
+
+/* 将控制面板死死顶在侧边栏最下方 */
+#user-control-panel {
+    margin-top: auto; 
+    background-color: #232428; /* 比侧边栏更深一点的颜色，凸显层次 */
+    border-radius: 12px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.user-profile {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.user-profile .avatar {
+    width: 36px;
+    height: 36px;
+    background: linear-gradient(135deg, #5865F2, #7C3AED);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+    box-shadow: 0 4px 10px rgba(88, 101, 242, 0.3);
+}
+
+.user-profile .info {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.user-profile .name {
+    font-size: 14px;
+    font-weight: 700;
+    color: #f2f3f5;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+.user-profile .status {
+    font-size: 11px;
+    color: #23a559; /* 绿色在线状态 */
+    font-weight: 500;
+}
+
+/* 操作图标矩阵 */
+.action-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px; /* 拉开一点图标之间的间距 */
+    justify-content: flex-start;
+}
+
+/* 核心按钮：扩大点击面积，完全居中 */
+.grid-btn {
+    position: relative; /* 为了定位悬浮窗 */
+    width: 40px;  /* 尺寸加大，纯图标看着更舒展 */
+    height: 40px;
+    background-color: #313338;
+    border: none;
+    border-radius: 8px;
+    color: #dbdee1;
+    font-size: 18px; /* 图标稍微放大 */
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0; /* 清除所有内边距，防止图标偏离中心 */
+    transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.grid-btn:hover:not(:disabled) {
+    background-color: #404249;
+    color: #fff;
+    transform: translateY(-2px);
+}
+
+.grid-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* 危险操作（断开、停止） */
+.grid-btn.danger-btn {
+    color: #f23f42;
+    background-color: rgba(242, 63, 66, 0.1);
+}
+.grid-btn.danger-btn:hover:not(:disabled) {
+    background-color: #f23f42;
+    color: #fff;
+}
+
+/* 激活状态 */
+.grid-btn.active {
+    background-color: rgba(242, 63, 66, 0.2);
+    color: #f23f42;
+}
+
+/* ==========================================
+   🌟 核心黑科技：自定义高级悬浮浮窗 (Tooltip)
+   ========================================== */
+.grid-btn::after {
+    content: attr(data-tooltip); /* 自动读取 html 里的文字 */
+    position: absolute;
+    bottom: 120%; /* 悬浮在按钮正上方 */
+    left: 50%;
+    transform: translateX(-50%) translateY(8px);
+    background-color: #111214;
+    color: #dbdee1;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    opacity: 0; /* 默认隐藏 */
+    visibility: hidden;
+    pointer-events: none;
+    transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+    z-index: 100;
+}
+
+/* 浮窗底部的小倒三角指示器 */
+.grid-btn::before {
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%) translateY(8px);
+    border-width: 5px;
+    border-style: solid;
+    border-color: #111214 transparent transparent transparent;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+    z-index: 100;
+}
+
+/* 鼠标悬停时，浮窗顺滑弹出并上浮 */
+.grid-btn:hover::after,
+.grid-btn:hover::before {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* 确保主视频区占满空间 */
+#video-container {
+    padding-bottom: 20px; /* 去除原本为底部栏留的巨大空白 */
+}

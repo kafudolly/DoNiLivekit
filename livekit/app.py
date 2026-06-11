@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, send_from_directory
 from livekit.api import LiveKitAPI, AccessToken, VideoGrants, ListRoomsRequest, ListParticipantsRequest
 from flask_cors import CORS
 import uuid
@@ -6,7 +6,9 @@ import sqlite3
 import os
 import asyncio
 
-app = Flask(__name__)
+BASE_DIR = os.path.dirname(__file__)
+UI_DIR = os.path.normpath(os.path.join(BASE_DIR, '..', 'ui'))
+app = Flask(__name__, static_folder=UI_DIR, static_url_path='')
 CORS(app)
 
 API_KEY = "devkey"
@@ -99,8 +101,7 @@ def build_token(user_name: str, room_name: str):
 
 @app.route('/')
 def index():
-    with open('index.html', 'r', encoding='utf-8') as f:
-        return render_template_string(f.read())
+    return send_from_directory(UI_DIR, 'index.html')
 
 
 @app.route('/api/get_token')
