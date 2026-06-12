@@ -62,13 +62,6 @@
                 </select>
             </div>
 
-            <!-- 障眼法：隐藏的工程级参数 (保证你的 JS 获取数值不断链) -->
-            <div id="hidden-settings" style="display: none;">
-                <select id="screen-res"><option value="1920x1080" selected>1080P</option></select>
-                <select id="screen-fps"><option value="30" selected>30 FPS</option></select>
-                <select id="screen-bitrate"><option value="5000" selected>5.0 Mbps</option></select>
-            </div>
-
             <!-- 用户名片展示 -->
             <div class="user-profile">
                 <div class="avatar">🎮</div>
@@ -82,10 +75,35 @@
             <div class="action-grid">
                 <button id="btn-mic" class="grid-btn" onclick="toggleMic()" disabled data-tooltip="开启麦克风">🎤</button>
                 <button id="btn-mic-monitor" class="grid-btn" onclick="toggleMicMonitor()" style="display: none;" data-tooltip="监听耳返">🎧</button>
-                <button id="btn-screen" class="grid-btn" onclick="toggleScreen()" disabled data-tooltip="共享屏幕">💻</button>
-                <button id="btn-app-audio" class="grid-btn" onclick="openAppAudioModal()" disabled data-tooltip="共享应用音频">🎵</button>
                 
-                <button id="btn-stop-app-audio" class="grid-btn danger-btn" onclick="stopAppAudioShare()" style="display: none;" data-tooltip="停止音频共享">⏹️</button>
+                <div class="screen-btn-wrapper">
+                    <button id="btn-screen" class="grid-btn" onclick="toggleScreen()" disabled>💻</button>
+                    <div class="screen-settings-popup">
+                        <div class="popup-title">💻 共享画质设置</div>
+                        <select id="screen-res" disabled>
+                            <option value="1280x720">720P (流畅)</option>
+                            <option value="1920x1080" selected>1080P (高清)</option>
+                            <option value="2560x1440">2K (超清)</option>
+                        </select>
+                        <div style="display: flex; gap: 8px;">
+                            <select id="screen-fps" disabled style="flex: 1;">
+                                <option value="30" selected>30 FPS</option>
+                                <option value="60">60 FPS</option>
+                            </select>
+                            <select id="screen-bitrate" disabled style="flex: 1;">
+                                <option value="2500">2.5 Mbps</option>
+                                <option value="5000" selected>5.0 Mbps</option>
+                                <option value="8000">8.0 Mbps</option>
+                                <option value="15000">15.0 Mbps</option>
+                                <option value="20000">20.0 Mbps</option>
+                                <option value="25000">25.0 Mbps</option>
+                                <option value="30000">30.0 Mbps</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="btn-app-audio" class="grid-btn" onclick="handleAppAudioClick()" disabled data-tooltip="共享应用音频">🎵</button>
                 <button id="btn-leave" class="grid-btn danger-btn" onclick="leaveRoom()" style="display: none;" data-tooltip="断开连接">🚪</button>
             </div>
         </div>

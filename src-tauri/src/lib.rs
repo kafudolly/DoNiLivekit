@@ -939,7 +939,7 @@ fn get_configured_capture_device(
     }
 }
 
-#[cfg(target_os = "windows")]
+/*#[cfg(target_os = "windows")]  用了Rnnnoise
 fn run_mic_capture(
     app_handle: tauri::AppHandle,
     state_running: Arc<Mutex<bool>>,
@@ -1003,7 +1003,7 @@ fn run_mic_capture(
         };
 
         unsafe { audio_client.Start() }.map_err(|e| hr_msg("启动麦克风采集失败", e.code()))?;
-        println!("🎙️ Rust 麦克风硬核接管已启动!");
+        println!("Rust 麦克风接管已启动!");
 
         // 低延迟软噪声门：避免阈值附近硬切导致“滋滋啦啦/断断续续”。
         // 不做 AI 降噪，只做每个音频块的平滑开关，因此几乎不增加语音延迟。
@@ -1195,6 +1195,227 @@ fn run_mic_capture(
             println!("⚠️ audio_client.Stop() 失败: {}", hr_hex(e.code()));
         }
 
+        Ok(())
+    })();
+
+    if should_uninit {
+        unsafe { CoUninitialize() };
+    }
+
+    result
+}
+*/
+
+#[cfg(target_os = "windows")]
+fn run_mic_capture(
+    app_handle: tauri::AppHandle,
+    state_running: Arc<Mutex<bool>>,
+    state_threshold: Arc<Mutex<f32>>,
+    state_boost: Arc<Mutex<f32>>,
+    selected_mic_device_id: Arc<Mutex<Option<String>>>,
+    pcm_tx: mpsc::Sender<Vec<u8>>,
+) -> Result<(), String> {
+    let mut should_uninit = false;
+    match unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) } {
+        Ok(()) => {
+            should_uninit = true;
+        }
+        Err(e) if e.code() == HRESULT(0x80010106u32 as i32) => {
+            // RPC_E_CHANGED_MODE: 已初始化
+        }
+        Err(e) => return Err(hr_msg("初始化 COM 失败", e.code())),
+    }
+
+    let result = (|| -> Result<(), String> {
+        let device = get_configured_capture_device(&selected_mic_device_id)?;
+        let audio_client: IAudioClient = match unsafe { device.Activate(CLSCTX_ALL, None) } {
+            Ok(v) => v,
+            Err(e) => return Err(hr_msg("激活麦克风 IAudioClient 失败", e.code())),
+        };
+
+        // 🌟 魔法核心：无论麦克风原生支持什么采样率和通道，强制要求 Windows 吐出 48kHz 单声道
+        const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
+        const AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM: u32 = 0x80000000;
+        const AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY: u32 = 0x08000000;
+
+        let capture_format = WAVEFORMATEX {
+            wFormatTag: WAVE_FORMAT_IEEE_FLOAT,
+            nChannels: 1,
+            nSamplesPerSec: 48000,
+            nAvgBytesPerSec: 48000 * 4,
+            nBlockAlign: 4,
+            wBitsPerSample: 32,
+            cbSize: 0,
+        };
+
+        let init_result = unsafe {
+            audio_client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                0,
+                0,
+                &capture_format as *const WAVEFORMATEX,
+                None,
+            )
+        };
+
+        if let Err(e) = init_result {
+            return Err(hr_msg("麦克风自动重采样初始化失败", e.code()));
+        }
+
+        let capture_client: IAudioCaptureClient = match unsafe { audio_client.GetService() } {
+            Ok(v) => v,
+            Err(e) => return Err(hr_msg("获取麦克风捕获服务失败", e.code())),
+        };
+
+        unsafe { audio_client.Start() }.map_err(|e| hr_msg("启动麦克风采集失败", e.code()))?;
+        println!("🎙️ 麦克风已启动: 强制 48kHz 单声道 + RNNoise 神经网络降噪接管!");
+
+        // 🌟 初始化神经网络降噪器 和 样本缓冲区
+        let mut denoise = nnnoiseless::DenoiseState::new();
+        let mut sample_buffer: Vec<f32> = Vec::with_capacity(1024);
+
+        // 🌟 保留你极其优秀的滞回平滑包络逻辑
+        let mut gate_gain = 0.0f32;
+        const GATE_ATTACK: f32 = 0.65;
+        const GATE_RELEASE: f32 = 0.08;
+        const GATE_FLOOR: f32 = 0.015;
+        const GATE_HYSTERESIS_PERCENT: f32 = 4.0; 
+
+        loop {
+            if let Ok(guard) = state_running.lock() {
+                if !*guard {
+                    break;
+                }
+            } else {
+                break;
+            }
+
+            let packet_frames = match unsafe { capture_client.GetNextPacketSize() } {
+                Ok(v) => v,
+                Err(e) if e.code() == AUDCLNT_E_DEVICE_INVALIDATED => {
+                    return Err(device_invalidated_err("GetNextPacketSize: 音频设备失效"));
+                }
+                Err(e) => {
+                    return Err(format!("GetNextPacketSize 失败, HRESULT={}", hr_hex(e.code())))
+                }
+            };
+
+            if packet_frames == 0 {
+                std::thread::sleep(Duration::from_millis(2));
+                continue;
+            }
+
+            let mut data_ptr: *mut u8 = std::ptr::null_mut();
+            let mut frames_to_read: u32 = 0;
+            let mut flags: u32 = 0;
+
+            if let Err(e) = unsafe {
+                capture_client.GetBuffer(&mut data_ptr, &mut frames_to_read, &mut flags, None, None)
+            } {
+                return Err(format!("GetBuffer 失败, HRESULT={}", hr_hex(e.code())));
+            }
+
+            let mut should_stop = false;
+
+            if frames_to_read > 0 {
+                // 1. 提取原始数据，绝对不要在这里应用增益！
+                if !data_ptr.is_null() && (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) == 0 {
+                    let f32_slice = unsafe {
+                        std::slice::from_raw_parts(data_ptr as *const f32, frames_to_read as usize)
+                    };
+                    for &sample in f32_slice {
+                        // 只做基本限幅防止溢出，保留原汁原味给 AI
+                        sample_buffer.push(sample.clamp(-1.0, 1.0));
+                    }
+                } else {
+                    // 🌟 修复底层陷阱：不用绝对的 0.0，而是注入极其微弱的交变信号 (-100dB)
+                    // 防止输入纯 0 导致 RNN 内部能量评估崩溃除以零
+                    let mut flip = false;
+                    for _ in 0..frames_to_read {
+                        let dither = if flip { 1e-6 } else { -1e-6 };
+                        flip = !flip;
+                        sample_buffer.push(dither);
+                    }
+                }
+
+                    while sample_buffer.len() >= 480 {
+                    let mut in_frame = [0.0f32; 480];
+                    // 🌟 核心修复 1：量纲转换
+                    // 将 WASAPI 的 [-1.0, 1.0] 放大到 RNNoise 要求的 [-32768.0, 32767.0] 量级
+                    for i in 0..480 {
+                        in_frame[i] = sample_buffer[i] * 32768.0;
+                    }
+                    sample_buffer.drain(0..480);
+
+                    // 🧠 核心修复 2：AI 如今终于能听到正常声强的数据了
+                    let mut out_frame = [0.0f32; 480];
+                    let mut vad_prob = denoise.process_frame(&mut out_frame, &in_frame);
+                    if vad_prob.is_nan() { vad_prob = 0.0; } 
+
+                    // 🔊 核心修复 3：将 AI 吐出的数据除以 32768.0，还原回系统标准的 [-1.0, 1.0]
+                    let boost_multiplier = if let Ok(guard) = state_boost.lock() { *guard } else { 1.0 };
+                    let mut sum_squares = 0.0f32;
+                    
+                    for x in out_frame.iter_mut() {
+                        if x.is_nan() || !x.is_finite() { *x = 0.0; }
+                        *x = (*x / 32768.0 * boost_multiplier).clamp(-1.0, 1.0);
+                        sum_squares += (*x) * (*x);
+                    }
+
+                    // 📊 计算音量推给绿条（依然基于合法的 [-1.0, 1.0] 体系）
+                    let rms = (sum_squares / 480.0).sqrt();
+                    let db = if rms > 0.0001 { 20.0 * rms.log10() } else { -100.0 };
+                    let volume_percent = ((db + 50.0) * 2.0).clamp(0.0, 100.0) as u32;
+
+                    let _ = app_handle.emit("mic_volume", volume_percent);
+
+                    // ==========================================
+                    // 🛡️ 物理滞回门限 + AI 概率双重锁
+                    // ==========================================
+                    let threshold = if let Ok(guard) = state_threshold.lock() { *guard } else { 0.0 };
+                    let close_threshold = (threshold - GATE_HYSTERESIS_PERCENT).max(0.0);
+                    let volume = volume_percent as f32;
+
+                    let volume_ok = volume >= threshold
+                        || (gate_gain > GATE_FLOOR && volume >= close_threshold);
+
+                    // 此时 vad_prob 终于能正确反映人声概率了
+                    let is_voice = vad_prob > 0.15; 
+                    let should_open = volume_ok && (is_voice || gate_gain > GATE_FLOOR);
+
+                    let target_gain = if should_open { 1.0 } else { 0.0 };
+                    let coeff = if target_gain > gate_gain { GATE_ATTACK } else { GATE_RELEASE };
+                    gate_gain += (target_gain - gate_gain) * coeff;
+
+                    let payload = if gate_gain < GATE_FLOOR {
+                        vec![0u8; 480 * 4] 
+                    } else {
+                        let mut gated_data = Vec::with_capacity(480 * 4);
+                        for x in out_frame {
+                            let gated = (x * gate_gain).clamp(-1.0, 1.0);
+                            gated_data.extend_from_slice(&gated.to_le_bytes());
+                        }
+                        gated_data
+                    };
+
+                    if pcm_tx.blocking_send(payload).is_err() {
+                        should_stop = true;
+                        break;
+                    }
+                }
+            }
+
+            if let Err(e) = unsafe { capture_client.ReleaseBuffer(frames_to_read) } {
+                return Err(hr_msg("释放麦克风 Buffer 失败", e.code()));
+            }
+
+            if should_stop {
+                break;
+            }
+        }
+
+        let _ = unsafe { audio_client.Stop() };
         Ok(())
     })();
 
@@ -1414,6 +1635,7 @@ fn run_capture_for_pid_inner(
     Ok(())
 }
 
+
 #[cfg(not(target_os = "windows"))]
 fn run_capture_for_pid(
     _pid: u32,
@@ -1423,7 +1645,7 @@ fn run_capture_for_pid(
     Err("当前平台不支持 WASAPI 进程回环捕获，仅 Windows 可用".into())
 }
 
-#[tauri::command]
+/*#[tauri::command]    这一段是原本的查询麦克风采样率的指令实现
 #[cfg(target_os = "windows")]
 fn query_mic_sample_rate(state: tauri::State<'_, AppState>) -> Result<u32, String> {
     let mut should_uninit = false;
@@ -1456,6 +1678,12 @@ fn query_mic_sample_rate(state: tauri::State<'_, AppState>) -> Result<u32, Strin
         unsafe { CoUninitialize() };
     }
     result
+}*/
+
+#[tauri::command]
+fn query_mic_sample_rate() -> Result<u32, String> {
+    // 🌟 直接向前端锁定 48000Hz (配合 AI 降噪)
+    Ok(48000)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

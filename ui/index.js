@@ -269,20 +269,23 @@ async function startCaptureMultiWithRetry(pids, maxAttempts = 8, intervalMs = 15
 }
 
 function updateAppAudioButtons() {
-    const shareBtn = document.getElementById('btn-app-audio');
-    const stopBtn = document.getElementById('btn-stop-app-audio');
-    if (!shareBtn || !stopBtn) return;
+    const btn = document.getElementById('btn-app-audio');
+    if (!btn) return;
 
     const connected = !!(room && room.localParticipant);
-    shareBtn.disabled = !connected || isAppAudioSharing;
-    stopBtn.disabled = !connected || !isAppAudioSharing;
+    // 只要连上房间，按钮就可以点击（开启或关闭）
+    btn.disabled = !connected;
 
     if (isAppAudioSharing) {
-        shareBtn.classList.add('active');
-        shareBtn.setAttribute('data-tooltip', '正在共享应用音频');
+        // 分享中：变红、换成停止图标
+        btn.classList.add('active');
+        btn.innerHTML = '🛑';
+        btn.setAttribute('data-tooltip', '停止音频共享');
     } else {
-        shareBtn.classList.remove('active');
-        shareBtn.setAttribute('data-tooltip', '共享应用音频');
+        // 未分享：恢复默认音乐图标
+        btn.classList.remove('active');
+        btn.innerHTML = '🎵';
+        btn.setAttribute('data-tooltip', '共享应用音频');
     }
 }
 
@@ -291,6 +294,15 @@ function closeAppAudioModal(event) {
     const modal = document.getElementById('app-audio-modal');
     if (modal) modal.classList.add('hidden');
     selectedAppAudioPids.clear();
+}
+
+// 🌟 智能路由：根据当前状态，决定是打开面板，还是停止共享
+function handleAppAudioClick() {
+    if (isAppAudioSharing) {
+        stopAppAudioShare();
+    } else {
+        openAppAudioModal();
+    }
 }
 
 async function openAppAudioModal() {
@@ -1116,7 +1128,6 @@ function resetRoomUIAfterDisconnect() {
     document.getElementById('chat-input').disabled = true;
     document.getElementById('btn-send').disabled = true;
     document.getElementById('btn-app-audio').disabled = true;
-    document.getElementById('btn-stop-app-audio').disabled = true;
     isMicOn = false;
     isScreenOn = false;
     isAppAudioSharing = false;
@@ -1792,7 +1803,6 @@ async function connectToChannel(targetRoomName, options = {}) {
         document.getElementById('screen-fps').disabled = false;
         document.getElementById('screen-bitrate').disabled = false;
         document.getElementById('btn-app-audio').disabled = false;
-        document.getElementById('btn-stop-app-audio').disabled = true;
         document.getElementById('btn-leave').style.display = 'flex';
 
         // 先同步麦克风设备，再自动开麦；否则 Tauri/Rust 可能仍会录系统默认麦克风。

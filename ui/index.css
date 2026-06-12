@@ -2,13 +2,36 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1f22; color: #dbdee1; height: 100vh; display: flex; overflow: hidden; }
 
-/* 左侧边栏 */
-#sidebar { width: 260px; background-color: #2b2d31; display: flex; flex-direction: column; padding: 20px; border-right: 1px solid #1e1f22; }
+/* 1. 修改侧边栏容器，允许其在极端情况下整体滚动 */
+#sidebar { 
+    width: 260px; 
+    background-color: #2b2d31; 
+    display: flex; 
+    flex-direction: column; 
+    padding: 20px; 
+    border-right: 1px solid #1e1f22; 
+    
+    /* 高度不足时允许侧边栏滚动，防止内容相互挤死 */
+    overflow-y: auto; 
+}
+#sidebar::-webkit-scrollbar { width: 4px; }
+#sidebar::-webkit-scrollbar-thumb { background: #1e1f22; border-radius: 2px; }
 .sidebar-title { font-size: 14px; font-weight: bold; color: #f2f3f5; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; }
 .section-title-row { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 10px; }
 .tiny-btn { width: 24px; height: 24px; border-radius: 50%; border: none; background: #404249; color: #fff; cursor: pointer; font-weight: 700; }
 .tiny-btn:hover { background: #5865f2; }
-#channel-list { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+#channel-list { 
+    max-height: 180px; 
+    overflow-y: auto; 
+    display: flex; 
+    flex-direction: column; 
+    gap: 6px; 
+    margin-bottom: 14px; 
+    
+    /* 强制留出空间，绝对不允许被压缩 */
+    min-height: 80px; 
+    flex-shrink: 0; 
+}
 .channel-item { border: none; border-radius: 6px; background: #313338; color: #dbdee1; text-align: left; padding: 8px 10px; cursor: pointer; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .channel-item:hover { background: #404249; }
 .channel-item.active { background: #5865f2; color: #fff; }
@@ -23,7 +46,17 @@ button.primary-btn:hover { background-color: #1a6334; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* 成员列表与音量滑块样式 */
-#participant-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+#participant-list { 
+    flex: 1; 
+    
+    /* 🌟 核心修复：设定最小高度，绝对不准被其他控件挤压到 0 */
+    min-height: 120px; 
+    
+    overflow-y: auto; 
+    display: flex; 
+    flex-direction: column; 
+    gap: 10px; 
+}
 .user-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px; background-color: #313338; border-radius: 6px; font-size: 14px; color: #dbdee1; }
 .user-item.active-speaker { background-color: #404249; box-shadow: inset 0 0 0 1px #5865F2; }
 .user-avatar { width: 32px; height: 32px; background-color: #5865F2; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-weight: bold; color: white; flex-shrink: 0; }
@@ -416,4 +449,109 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* 确保主视频区占满空间 */
 #video-container {
     padding-bottom: 20px; /* 去除原本为底部栏留的巨大空白 */
+}
+
+
+/* ==========================================
+   悬浮窗屏幕共享画质设置悬浮窗
+   ========================================== */
+
+/* 包裹器：用于定位悬浮窗 */
+.screen-btn-wrapper {
+    position: relative;
+    display: inline-flex;
+}
+
+/* 悬浮面板本体 */
+.screen-settings-popup {
+    position: absolute;
+    bottom: calc(100% + 14px); /* 悬浮在按钮上方 */
+    left: 50%;
+    transform: translateX(-50%) translateY(10px);
+    width: 230px;
+    background-color: #111214;
+    border: 1px solid #3b3d44;
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+    
+    /* 默认隐藏，带顺滑动画 */
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+    z-index: 200;
+}
+
+/* 隐形桥接区：防止鼠标从按钮移向悬浮窗时丢失 Hover 状态导致闪退 */
+.screen-settings-popup::before {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 100%;
+    height: 20px;
+    background: transparent;
+}
+
+/* 底部的小倒三角指示器 */
+.screen-settings-popup::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%) rotate(45deg);
+    width: 10px;
+    height: 10px;
+    background-color: #111214;
+    border-right: 1px solid #3b3d44;
+    border-bottom: 1px solid #3b3d44;
+}
+
+/* 鼠标悬停在按钮区域时，弹出悬浮窗 */
+.screen-btn-wrapper:hover .screen-settings-popup {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* 内部文本与下拉框美化 */
+.screen-settings-popup .popup-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #dbdee1;
+    text-align: center;
+    margin-bottom: 2px;
+}
+
+.screen-settings-popup select {
+    width: 100%;
+    background-color: #1e1f22;
+    color: #dbdee1;
+    border: 1px solid #3b3d44;
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.2s;
+    /* 去除原生箭头，保持暗黑美观 */
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23dbdee1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+}
+
+.screen-settings-popup select:hover:not(:disabled) {
+    border-color: #5865F2;
+}
+
+.screen-settings-popup select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }

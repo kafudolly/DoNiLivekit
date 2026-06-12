@@ -31,6 +31,8 @@ tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = "0.20" 
 futures-util = "0.3" 
 # 微软官方 Windows 底层核武器
+nnnoiseless = "0.5.1"
+
 [dependencies.windows]
 version = "0.52"
 features = [
