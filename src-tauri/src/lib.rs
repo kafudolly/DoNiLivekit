@@ -1206,6 +1206,22 @@ fn run_mic_capture(
 }
 */
 
+// 防炸麦软拐点限幅器 (Soft-knee Limiter)
+#[inline]
+fn soft_limit(sample: f32) -> f32 {
+    let threshold = 0.7f32; // 警告线：超过 0.7 开始介入压缩
+    let ceiling = 0.99f32;  // 天花板：绝对死线，永不突破 1.0 防止爆音
+    let abs_s = sample.abs();
+
+    if abs_s <= threshold {
+        sample // 安全区内原汁原味输出
+    } else {
+        let over = abs_s - threshold;
+        let safe_over = over / (1.0 + over / (ceiling - threshold));
+        sample.signum() * (threshold + safe_over)
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn run_mic_capture(
     app_handle: tauri::AppHandle,
@@ -1359,7 +1375,7 @@ fn run_mic_capture(
                     
                     for x in out_frame.iter_mut() {
                         if x.is_nan() || !x.is_finite() { *x = 0.0; }
-                        *x = (*x / 32768.0 * boost_multiplier).clamp(-1.0, 1.0);
+                        let raw_val = *x / 32768.0 * boost_multiplier;
                         sum_squares += (*x) * (*x);
                     }
 
