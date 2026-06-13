@@ -1,134 +1,229 @@
-# DoNiChannel Developer Guide
+# 项目开发指南
 
-This guide describes the frontend architecture after the Stage 9 cleanup. It is intended for future developers who need to add features without turning the project back into a single-file legacy frontend.
+本文档面向后续参与开发的同学，说明本项目的前端结构、模块职责、音频链路边界和新增功能规范。
 
-## 1. Architecture
+## 当前架构定位
 
-The frontend is intentionally split into four layers:
+本项目当前采用的是：
 
 ```text
-src/
-├─ app/          Runtime assembly and compatibility exports
-├─ stores/       Lightweight UI/state snapshots
-├─ features/     Business logic and integration with LiveKit/Tauri/WebAudio
-├─ components/   Vue components and layout
-├─ shared/       Pure utilities, constants, Tauri wrappers, error helpers
-└─ legacy/       Compatibility entry only; do not add new business logic here
+Vue 组件化 UI
++ feature 业务模块
++ store 状态层
++ Tauri/Rust 本地能力
++ 少量 legacy 兼容入口
+```
+
+这不是完全重写后的纯 Vue reactive 项目，而是在保证 Rust 音频、LiveKit、切频道恢复等核心链路稳定的前提下，整理出来的长期可维护结构。
+
+## 目录职责
+
+```text
+ui/src/
+├─ app/
+│  └─ runtime.js
+├─ stores/
+│  └─ appStore.js
+├─ features/
+├─ components/
+├─ shared/
+└─ legacy/
 ```
 
 ### `app/runtime.js`
 
-The runtime is the composition root. It creates feature modules, wires dependencies, exposes actions for Vue components, and keeps a light store snapshot in sync. Runtime may coordinate modules, but it should not become a new business-logic dump.
+应用运行时装配层。负责：
+
+- 初始化全局状态
+- 初始化各 feature 模块
+- 绑定旧 DOM 兼容函数
+- 提供给 `App.vue` 调用的业务入口
+
+不要在这里堆大量新业务逻辑。如果一个功能超过几十行，应该拆到 `features/`。
+
+### `stores/appStore.js`
+
+轻量状态层。负责保存 UI 需要读取的状态，例如：
+
+- 当前是否已进入大厅
+- 当前频道
+- 是否开麦
+- 是否屏幕共享
+- 当前选择的麦克风/扬声器
+- 弹窗打开状态
+- 错误提示状态
+
+不要把重对象放进 store，例如：
+
+- LiveKit Room
+- AudioContext
+- MediaStreamTrack
+- WebSocket
+- AudioWorkletNode
+
+这些对象生命周期复杂，应该留在 `features/` 中管理。
 
 ### `features/`
 
-Feature modules own business actions:
+业务模块层。负责真正执行动作，例如：
 
-- `roomConnection.js`: lobby, channel list, room connect/disconnect, channel switch recovery.
-- `rustMic.js`: Rust microphone publish/unpublish and mic error handling.
-- `audioPipelines.js`: 9001/9002 WebSocket PCM, AudioWorklet, MediaStreamTrack lifecycle.
-- `appAudio.js`: process selection and app-audio publishing.
-- `screenShare.js`: screen share publishing, local preview, bitrate monitor.
-- `livekitEvents.js`: LiveKit room events and remote track attachment.
-- `participants.js`: participant list rendering and active-speaker UI.
-- `remoteAudio.js`: GainNode routing and per-user volume.
-- `devices.js`: microphone and audio output devices.
-- `chat.js`: local chat send/render.
+- 调用 Tauri `invoke`
+- 连接 LiveKit 房间
+- 发布/取消发布音视频 track
+- 创建 AudioContext
+- 管理 WebSocket
+- 处理屏幕共享
+- 处理应用音频共享
 
-Feature modules may call Tauri, LiveKit, AudioContext, and update store snapshots through runtime callbacks. Avoid adding large UI templates here unless the module is still in a legacy DOM compatibility zone.
-
-### `stores/`
-
-`stores/appStore.js` is a lightweight state snapshot for new Vue-side features. Do not store heavy runtime objects such as `LiveKit.Room`, `AudioContext`, `MediaStreamTrack`, or WebSocket instances in stores. Keep those in feature modules.
+feature 模块应该尽量少直接操作 DOM。理想情况下，feature 更新 store，由 Vue 组件自动渲染 UI。
 
 ### `components/`
 
-Vue components own UI structure and events. They should emit user actions and receive/observe state. They should not directly call Tauri commands, construct LiveKit rooms, or manage AudioContext lifecycle.
+Vue 组件层。负责展示 UI 和触发事件。
+
+组件里不要直接写复杂业务，例如：
+
+```js
+invoke('toggle_rust_mic')
+room.localParticipant.publishTrack(...)
+document.getElementById(...)
+```
+
+组件应该通过 props、emits 或 runtime 暴露的方法触发动作。
+
+### `shared/`
+
+通用工具层。适合放：
+
+- Tauri invoke/listen 封装
+- 常量
+- 文本转义
+- 错误信息格式化
+- 通用工具函数
 
 ### `legacy/`
 
-`legacy/client.js` exists only so older imports keep working. New features must not be added there.
+兼容入口。当前 `legacy/client.js` 只用于保持历史导入路径或旧 HTML 调用兼容。
 
-## 2. Golden rules for new features
+后续不要继续往 `legacy/client.js` 中新增业务。
 
-1. **UI goes in `components/`.**
-2. **Business actions go in `features/`.**
-3. **Shared helpers go in `shared/`.**
-4. **State snapshots go in `stores/`.**
-5. **Do not add new logic to `legacy/client.js`.**
-6. **Do not rewrite 9001/9002 audio pipelines casually.** They are intentionally isolated and should be tested after every change.
-7. **Keep error messages actionable.** Use `shared/errors.js` for consistent logs and user-facing alerts.
+## 新增功能规范
 
-## 3. Adding a feature
+新增功能时，按照以下顺序思考：
 
-Example: adding an audio settings modal.
+### 1. 这个功能是否有状态？
+
+有状态就放到 `stores/appStore.js` 或新增专门 store。
+
+例如：
 
 ```text
-src/components/modals/AudioSettingsModal.vue
-src/features/audioSettings.js
-src/stores/appStore.js        // add lightweight state only
-src/app/runtime.js            // wire feature actions to components
+ui.isSettingsOpen
+media.isMicOn
+devices.selectedMicId
+connection.currentChannel
 ```
 
-Recommended flow:
+### 2. 这个功能是否有业务动作？
 
-1. Add state fields to `appStore` only if UI needs to react to them.
-2. Add business actions in a feature module.
-3. Add or update Vue components.
-4. Wire actions in `app/runtime.js`.
-5. Run the full regression checklist below.
+有业务动作就放到 `features/xxx.js`。
 
-## 4. Error handling conventions
+例如新增“用户设置”：
 
-Use these helpers from `src/shared/errors.js`:
+```text
+features/settings.js
+```
+
+里面放：
 
 ```js
-import { getErrorMessage, logError, alertError } from '../shared/errors.js';
-
-try {
-    await doSomething();
-} catch (error) {
-    logError('设备设置/切换麦克风', error);
-    alertError('切换麦克风失败', error, '设备可能已被拔出或被其他程序独占。');
-}
+loadSettings()
+saveSettings()
+resetSettings()
 ```
 
-Console messages should include the module and action, for example:
+### 3. 这个功能是否有界面？
+
+有界面就放到 `components/`。
+
+例如：
 
 ```text
-[roomConnection] 连接频道失败: token service returned 500
-[rustMic] 启动 Rust 麦克风失败: ws://127.0.0.1:9002 timeout
+components/modals/SettingsModal.vue
+components/settings/AudioSettings.vue
+components/settings/AppearanceSettings.vue
 ```
 
-## 5. Regression checklist
+### 4. 是否需要通用工具？
 
-Run this checklist after every structural change:
+通用工具放到 `shared/`。
 
-1. App starts in Tauri.
-2. Lobby can be entered.
-3. The app auto-joins the first voice channel if enabled.
-4. Rust microphone publishes correctly.
-5. VAD green bar moves normally.
-6. Switching channels restores microphone state.
-7. Microphone device selection works.
-8. Audio output device switching works.
-9. App-audio sharing works through 9001.
-10. Screen share works, including preview and stop flow.
-11. Chat send/receive works.
-12. Leave room releases local resources.
+## 错误处理规范
 
-## 6. Commands
+错误信息必须包含模块名和动作名，方便定位问题。
 
-```powershell
-# Frontend build check
-cd F:\livekit_pack\ui
-npm run build
+推荐格式：
 
-# Full Tauri development run
-cd F:\livekit_pack
-npx tauri dev
+```text
+模块名/函数名：具体错误说明
 ```
 
-## 7. Known compatibility notes
+示例：
 
-Some components still preserve fixed DOM IDs because LiveKit callbacks and legacy DOM rendering use them. This is intentional. Future pure-Vue migration should move one area at a time, starting with low-risk UI such as channel list or chat messages, not the Rust microphone pipeline.
+```js
+throw new Error(`rustMic/startRustMicShare：Rust 麦克风发布失败：${message}`);
+```
+
+`catch` 中不要只写：
+
+```js
+console.error(error);
+```
+
+应该写：
+
+```js
+console.error('rustMic/startRustMicShare：启动 Rust 麦克风失败', error);
+```
+
+## 不要做的事
+
+后续开发中避免：
+
+```text
+1. 把新功能直接写进 legacy/client.js
+2. 在 Vue 组件里直接操作 AudioContext 或 LiveKit Room
+3. 在 feature 模块里大段拼 innerHTML
+4. 把 MediaStreamTrack、AudioContext、WebSocket 放进 store
+5. 为了改 UI 去重写 9001/9002 音频管线
+6. 一次性同时改 UI、音频、房间连接和 Rust 后端
+```
+
+## 推荐功能开发流程
+
+每次加功能建议按以下流程：
+
+```text
+1. 新建 feature 分支
+2. 明确功能属于 UI / feature / store / shared 哪一层
+3. 小步提交
+4. 每次修改后测试核心链路
+5. 合并前检查日志和错误提示
+```
+
+核心回归测试清单：
+
+```text
+页面启动
+进入大厅
+自动进入默认语音频道
+Rust 麦克风发布
+绿线跳动
+切换频道后麦克风恢复
+麦克风设备切换
+扬声器切换
+应用音频共享
+屏幕共享
+聊天发送/接收
+离开房间资源释放
+```
