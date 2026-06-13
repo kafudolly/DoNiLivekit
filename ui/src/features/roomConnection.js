@@ -61,6 +61,95 @@ export function createRoomConnectionFeature(context) {
         }).join('');
     }
 
+        /** 从 Presence 成员对象中提取显示名。 */
+    function getPresenceMemberName(member) {
+        if (!member) return '';
+        if (typeof member === 'string') return member;
+        return String(member.displayName || member.name || member.identity || '').trim();
+    }
+
+    /** 使用 Presence 快照重建频道列表和频道成员。 */
+    function applyPresenceSnapshot(message) {
+        if (!message || !Array.isArray(message.channels)) return;
+
+        const nextChannels = [];
+        const nextParticipants = {};
+
+        message.channels.forEach((channel) => {
+            const roomName = String(channel.name || channel.id || '').trim();
+            if (!roomName) return;
+
+            nextChannels.push(roomName);
+
+            const members = Array.isArray(channel.members) ? channel.members : [];
+            nextParticipants[roomName] = members
+                .map(getPresenceMemberName)
+                .filter(Boolean);
+        });
+
+        if (nextChannels.length > 0) {
+            channels = nextChannels;
+        }
+
+        Object.keys(channelParticipants).forEach((key) => delete channelParticipants[key]);
+        Object.keys(nextParticipants).forEach((key) => {
+            channelParticipants[key] = nextParticipants[key];
+        });
+
+        renderChannelList();
+    }
+
+    /** 处理 Presence 增量事件，避免继续依赖 /api/rooms 轮询。 */
+    function applyPresenceMessage(message) {
+        if (!message || !message.type) return;
+
+        if (message.type === 'presence_snapshot') {
+            applyPresenceSnapshot(message);
+            return;
+        }
+
+        if (message.type === 'participant_moved') {
+            const displayName = String(message.displayName || message.identity || '').trim();
+            const from = message.from;
+            const to = message.to;
+
+            if (displayName && from && Array.isArray(channelParticipants[from])) {
+                channelParticipants[from] = channelParticipants[from].filter((name) => name !== displayName);
+            }
+
+            if (displayName && to) {
+                if (!channels.includes(to)) channels.push(to);
+                if (!Array.isArray(channelParticipants[to])) channelParticipants[to] = [];
+                if (!channelParticipants[to].includes(displayName)) {
+                    channelParticipants[to].push(displayName);
+                }
+            }
+
+            renderChannelList();
+            return;
+        }
+
+        if (message.type === 'participant_offline') {
+            const displayName = String(message.displayName || message.identity || '').trim();
+
+            if (displayName) {
+                Object.keys(channelParticipants).forEach((roomName) => {
+                    if (Array.isArray(channelParticipants[roomName])) {
+                        channelParticipants[roomName] = channelParticipants[roomName].filter((name) => name !== displayName);
+                    }
+                });
+            }
+
+            renderChannelList();
+            return;
+        }
+
+        if (message.type === 'participant_online') {
+            // 进入大厅但还没加入语音频道，不显示在频道下面。
+            return;
+        }
+    }
+
     /** 从后端 /api/rooms 拉取频道和在线成员，用于大厅轮询。 */
     async function refreshRoomsFromServer() {
         const serverConfig = getServerConfig();
@@ -139,7 +228,13 @@ export function createRoomConnectionFeature(context) {
             if (!response.ok) {
                 throw new Error(data.error || `创建频道接口返回异常：HTTP ${response.status}`);
             }
-            await refreshRoomsFromServer();
+            if (!channels.includes(name)) {
+                channels.push(name);
+                channelParticipants[name] = [];
+                renderChannelList();
+            }
+
+            context.presence.requestSnapshot?.();
             await switchChannel(name);
         } catch (e) {
             logError('roomConnection/createChannel 创建频道失败', e);
@@ -202,11 +297,17 @@ export function createRoomConnectionFeature(context) {
         document.getElementById('btn-connect').style.backgroundColor = '#1a6334';
         document.getElementById('header').innerText = '# 🏛️ DoNiChannel 电竞大厅（选择左侧语音分组）';
 
-        await refreshRoomsFromServer().catch((err) => {
-            logError('roomConnection/joinRoom 进入大厅后拉取房间列表失败', err, 'warn');
-            renderChannelList();
-        });
-        startRoomPolling();
+        try {
+            await context.presence.connect({
+                apiBase: serverConfig.apiBase,
+                username,
+            });
+            context.presence.requestSnapshot();
+        } catch (err) {
+            logError('roomConnection/joinRoom 连接 Presence WebSocket 失败', err, 'warn');
+        }
+
+        renderChannelList();
 
         if (context.autoJoinFirstChannelAfterLobby && autoJoinFirstChannel && !context.getRoom() && Array.isArray(channels) && channels.length > 0) {
             await switchChannel(channels[0]);
@@ -270,6 +371,14 @@ export function createRoomConnectionFeature(context) {
 
             await connectToChannel(roomName, { autoMic: false });
 
+            if (context.getRoom() && currentChannel === roomName) {
+                try {
+                    context.presence.joinChannel(roomName);
+                } catch (error) {
+                    logError('roomConnection/switchChannel 通知 Presence 切换频道失败', error, 'warn');
+                }
+            }
+
             const nextRoom = context.getRoom();
             if (shouldRestoreMicAfterChannelSwitch && nextRoom && nextRoom.localParticipant) {
                 try {
@@ -307,7 +416,12 @@ export function createRoomConnectionFeature(context) {
         const serverConfig = getServerConfig();
 
         try {
-            const response = await fetch(`${serverConfig.apiBase}/api/get_token?user=${encodeURIComponent(username)}&room=${encodeURIComponent(targetRoomName)}`);
+            const presenceIdentity = context.presence?.getIdentity?.();
+            const tokenUrl = `${serverConfig.apiBase}/api/get_token?user=${encodeURIComponent(username)}&room=${encodeURIComponent(targetRoomName)}${
+                presenceIdentity ? `&identity=${encodeURIComponent(presenceIdentity)}` : ''
+            }`;
+
+            const response = await fetch(tokenUrl);
             const data = await response.json();
             const token = data.token;
 
@@ -373,6 +487,13 @@ export function createRoomConnectionFeature(context) {
 
     /** 主动离开房间；释放麦克风、应用音频、屏幕共享和远端音频资源。 */
     async function leaveRoom() {
+        try {
+            context.presence.leaveChannel?.();
+            context.presence.disconnect?.();
+        } catch (error) {
+            logError('roomConnection/leaveRoom 断开 Presence 失败', error, 'warn');
+        }
+
         if (context.isTauriClient && context.rustMic.getIsMicOn()) {
             await context.rustMic.stopRustMicShare();
         }
@@ -395,6 +516,7 @@ export function createRoomConnectionFeature(context) {
         normalizeServerInput,
         getServerConfig,
         renderChannelList,
+        applyPresenceMessage,
         refreshRoomsFromServer,
         startRoomPolling,
         stopRoomPolling,

@@ -30,6 +30,7 @@ import { createParticipantsFeature } from '../features/participants.js';
 import { createLivekitEventsFeature } from '../features/livekitEvents.js';
 import { createRustMicFeature } from '../features/rustMic.js';
 import { createRoomConnectionFeature } from '../features/roomConnection.js';
+import { createPresenceClient } from '../features/presenceClient.js';
 
 // 运行时装配层。
 // 只负责创建 feature、注入依赖、同步 appStore、暴露给 Vue/旧 onclick 的动作。
@@ -45,6 +46,14 @@ let selectedAudioOutputId = localStorage.getItem('lk_audio_output') || 'default'
 const userVolumes = loadUserVolumesFromStorage();
 const audioPipelinesFeature = createAudioPipelinesFeature();
 let roomConnectionFeature;
+
+const presenceClient = createPresenceClient({
+    logError,
+    onMessage: (message) => {
+        roomConnectionFeature?.applyPresenceMessage?.(message);
+        requestStoreSync();
+    },
+});
 
 /** 将远端成员音量偏好写回 localStorage。 */
 function saveUserVolumesToStorage() {
@@ -142,6 +151,7 @@ const rustMicFeature = createRustMicFeature({
 roomConnectionFeature = createRoomConnectionFeature({
     LivekitClient,
     isTauriClient,
+    presence: presenceClient,
     defaultServerIp: DEFAULT_SERVER_IP,
     autoJoinFirstChannelAfterLobby: AUTO_JOIN_FIRST_CHANNEL_AFTER_LOBBY,
     sanitizeText,
@@ -425,6 +435,7 @@ Object.assign(window, {
     renderChatMessage,
     switchMicSource,
     __appStore: appStore,
+    __presenceClient: presenceClient,
     __syncAppStore: syncAppStore,
 });
 
