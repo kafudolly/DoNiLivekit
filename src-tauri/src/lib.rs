@@ -1367,51 +1367,88 @@ fn run_mic_capture(
                     // 🧠 核心修复 2：AI 如今终于能听到正常声强的数据了
                     let mut out_frame = [0.0f32; 480];
                     let mut vad_prob = denoise.process_frame(&mut out_frame, &in_frame);
-                    if vad_prob.is_nan() { vad_prob = 0.0; } 
-
-                    // 🔊 核心修复 3：将 AI 吐出的数据除以 32768.0，还原回系统标准的 [-1.0, 1.0]
-                    let boost_multiplier = if let Ok(guard) = state_boost.lock() { *guard } else { 1.0 };
-                    let mut sum_squares = 0.0f32;
-                    
-                    for x in out_frame.iter_mut() {
-                        if x.is_nan() || !x.is_finite() { *x = 0.0; }
-                        let raw_val = *x / 32768.0 * boost_multiplier;
-                        sum_squares += (*x) * (*x);
+                    if vad_prob.is_nan() || !vad_prob.is_finite() {
+                        vad_prob = 0.0;
                     }
 
-                    // 📊 计算音量推给绿条（依然基于合法的 [-1.0, 1.0] 体系）
+                    // RNNoise 的输入/输出都是 32768 量级。
+                    // 这里必须先还原成 WebAudio / LiveKit 使用的 [-1.0, 1.0]。
+                    let boost_multiplier = if let Ok(guard) = state_boost.lock() {
+                        *guard
+                    } else {
+                        1.0
+                    };
+
+                    let mut normalized_frame = [0.0f32; 480];
+                    let mut sum_squares = 0.0f32;
+
+                    for i in 0..480 {
+                        let mut sample = out_frame[i];
+
+                        if sample.is_nan() || !sample.is_finite() {
+                            sample = 0.0;
+                        }
+
+                        // 核心修复：RNNoise 输出必须除以 32768.0
+                        let normalized = (sample / 32768.0).clamp(-1.0, 1.0);
+
+                        // 保留你原来的 5.0 增益逻辑，但必须在 [-1, 1] 体系里做
+                        let boosted = normalized * boost_multiplier;
+
+                        // 使用 soft_limit，而不是硬 clamp
+                        let final_sample = soft_limit(boosted).clamp(-0.98, 0.98);
+
+                        normalized_frame[i] = final_sample;
+                        sum_squares += final_sample * final_sample;
+                    }
+
+                    // 绿线音量必须基于最终的 [-1.0, 1.0] 音频计算
                     let rms = (sum_squares / 480.0).sqrt();
-                    let db = if rms > 0.0001 { 20.0 * rms.log10() } else { -100.0 };
+                    let db = if rms > 0.0001 {
+                        20.0 * rms.log10()
+                    } else {
+                        -100.0
+                    };
                     let volume_percent = ((db + 50.0) * 2.0).clamp(0.0, 100.0) as u32;
 
                     let _ = app_handle.emit("mic_volume", volume_percent);
 
                     // ==========================================
-                    // 🛡️ 物理滞回门限 + AI 概率双重锁
+                    // 物理滞回门限 + AI 概率双重锁
                     // ==========================================
-                    let threshold = if let Ok(guard) = state_threshold.lock() { *guard } else { 0.0 };
+                    let threshold = if let Ok(guard) = state_threshold.lock() {
+                        *guard
+                    } else {
+                        0.0
+                    };
+
                     let close_threshold = (threshold - GATE_HYSTERESIS_PERCENT).max(0.0);
                     let volume = volume_percent as f32;
 
                     let volume_ok = volume >= threshold
                         || (gate_gain > GATE_FLOOR && volume >= close_threshold);
 
-                    // 此时 vad_prob 终于能正确反映人声概率了
-                    let is_voice = vad_prob > 0.15; 
+                    let is_voice = vad_prob > 0.15;
                     let should_open = volume_ok && (is_voice || gate_gain > GATE_FLOOR);
 
                     let target_gain = if should_open { 1.0 } else { 0.0 };
-                    let coeff = if target_gain > gate_gain { GATE_ATTACK } else { GATE_RELEASE };
+                    let coeff = if target_gain > gate_gain {
+                        GATE_ATTACK
+                    } else {
+                        GATE_RELEASE
+                    };
                     gate_gain += (target_gain - gate_gain) * coeff;
 
                     let payload = if gate_gain < GATE_FLOOR {
-                        vec![0u8; 480 * 4] 
+                        vec![0u8; 480 * 4]
                     } else {
-                        let mut gated_data = Vec::with_capacity(480 * 4);
-                        for x in out_frame {
-                            let gated = (x * gate_gain).clamp(-1.0, 1.0);
+                        let mut gated_data = Vec::<u8>::with_capacity(480 * 4);
+
+                        for sample in normalized_frame {
+                            let gated = (sample * gate_gain).clamp(-0.98, 0.98);
                             gated_data.extend_from_slice(&gated.to_le_bytes());
                         }
+
                         gated_data
                     };
 

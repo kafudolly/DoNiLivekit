@@ -3,9 +3,12 @@
   "productName": "小豆泥电竞",
   "version": "0.1.0",
 "identifier": "com.r.donichannel",
-"build": {
-  "frontendDist": "../ui"
-},
+  "build": {
+    "beforeDevCommand": "npm run dev --prefix ./ui",
+    "beforeBuildCommand": "npm run build --prefix ./ui",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../ui/dist"
+  },
   "app": {
     "withGlobalTauri": true,
     "windows": [
