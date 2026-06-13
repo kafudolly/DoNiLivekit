@@ -1,16 +1,10 @@
 import { alertError, formatError, getErrorMessage, logError } from '../shared/errors.js';
 
-/**
- * 应用音频共享模块。
- *
- * 负责从 Rust 9001 获取指定进程的 PCM 音频，并发布为 LiveKit `app-audio` track。
- * 本模块不保存房间状态；房间、publication、AudioWorklet 管线均由 runtime 通过 context 注入。
- */
-
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/** 调用 Rust start_capture，并在 9001 推流通道尚未就绪时短暂重试。 */
 async function startCaptureWithRetry(invoke, pid, maxAttempts = 8, intervalMs = 150) {
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -27,6 +21,7 @@ async function startCaptureWithRetry(invoke, pid, maxAttempts = 8, intervalMs = 
     throw new Error(formatError(`启动应用音频采集失败(pid=${pid})`, lastError));
 }
 
+/** 多进程应用音频采集入口；用于同时共享多个应用的声音。 */
 async function startCaptureMultiWithRetry(invoke, pids, maxAttempts = 8, intervalMs = 150) {
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -43,9 +38,11 @@ async function startCaptureMultiWithRetry(invoke, pids, maxAttempts = 8, interva
     throw new Error(formatError(`启动多应用音频采集失败(pids=${pids.join(',')})`, lastError));
 }
 
+/** 创建应用音频共享模块。context 提供 room、publication 和 9001 PCM 管线操作。 */
 export function createAppAudioFeature(context) {
     const selectedAppAudioPids = new Set();
 
+    /** 根据房间连接和共享状态刷新左下角应用音频按钮。 */
     function updateAppAudioButtons() {
         const btn = document.getElementById('btn-app-audio');
         if (!btn) return;
@@ -80,6 +77,7 @@ export function createAppAudioFeature(context) {
         }
     }
 
+    /** 打开应用音频弹窗，并从 Rust 获取当前活跃进程列表。 */
     async function openAppAudioModal() {
         const room = context.getRoom();
         if (!room || !room.localParticipant) {
@@ -135,6 +133,7 @@ export function createAppAudioFeature(context) {
         }
     }
 
+    /** 确认进程选择：启动 9001 管线并将 app-audio track 发布到当前频道。 */
     async function confirmAppAudioSelection() {
         const pids = Array.from(selectedAppAudioPids.values());
         if (pids.length === 0) {
@@ -185,6 +184,7 @@ export function createAppAudioFeature(context) {
         }
     }
 
+    /** 停止 app-audio 发布并释放 9001 AudioWorklet/WebSocket 管线。 */
     async function stopAppAudioShare() {
         const room = context.getRoom();
         try {

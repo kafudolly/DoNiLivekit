@@ -11,11 +11,7 @@ defineEmits([
 </script>
 
 <template>
-  <!--
-    左下角个人控制坞。
-    这一阶段只把 DOM 拆成组件，仍保留原 id，方便设备模块、rustMic 模块、roomConnection 模块
-    继续通过稳定入口更新按钮状态。
-  -->
+  <!-- 左下角控制坞：保留按钮 id，供 rustMic/devices/screenShare 模块同步状态。 -->
   <div id="user-control-panel">
     <div
       class="device-selectors"

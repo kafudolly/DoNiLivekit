@@ -1,7 +1,4 @@
-// Legacy compatibility entry.
-//
-// Stage 8 后，真正的前端运行时已经移动到 ../app/runtime.js。
-// 保留这个文件是为了兼容旧 import 路径和少量 window.xxx 调用。
-// 新功能请优先从 src/app/runtime.js 或 stores/features 中接入，不要继续把业务堆回这里。
+// 兼容旧入口。
+// 真正的前端运行时在 src/app/runtime.js；此文件只保留旧 import 路径，禁止继续写业务逻辑。
 
 export * from '../app/runtime.js';

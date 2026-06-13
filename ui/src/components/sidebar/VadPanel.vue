@@ -1,11 +1,5 @@
 <template>
-  <!--
-    Rust 麦克风阈值与增益控制面板。
-    输入事件仍在 initLegacyDom() 中绑定到 Tauri invoke：
-    - set_mic_vad_threshold
-    - set_mic_boost
-    这里先只负责稳定保留 DOM 结构和 id。
-  -->
+  <!-- Rust 麦克风控制面板：滑块事件在 runtime.initLegacyDom() 中绑定到 Tauri command。 -->
   <div
     id="vad-module"
     class="vad-container"

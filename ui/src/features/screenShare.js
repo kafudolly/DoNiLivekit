@@ -1,23 +1,13 @@
 import { alertError, logError } from '../shared/errors.js';
 
-/**
- * 屏幕共享模块。
- *
- * 负责：
- * - 屏幕共享开启/关闭
- * - 屏幕共享系统音频预检查与降级提示
- * - 本地屏幕预览
- * - 屏幕共享实际码率日志
- *
- * 这里通过 context 访问 room/isScreenOn，避免把 LiveKit 房间主状态搬离 client.js。
- */
-
+/** 创建屏幕共享模块；负责屏幕视频、系统音频、预览和码率监控。 */
 export function createScreenShareFeature(context) {
     let screenBitrateMonitorTimer = null;
     let lastScreenOutboundStats = null;
     let currentScreenTargetBitrate = 0;
     let currentLocalScreenTrack = null;
 
+    /** 把 getDisplayMedia 常见异常转换成用户能理解的系统音频提示。 */
     function getShareAudioErrorMessage(err) {
         const name = err?.name || 'UnknownError';
         if (name === 'NotAllowedError') return '你取消了系统音频授权，或未勾选“分享系统音频”。';
@@ -26,6 +16,7 @@ export function createScreenShareFeature(context) {
         return `系统音频共享失败：${name}`;
     }
 
+    /** 屏幕共享前检查浏览器、系统和安全上下文是否适合采集系统音频。 */
     function getSystemAudioPreflight() {
         const issues = [];
         const ua = navigator.userAgent || '';
@@ -41,6 +32,7 @@ export function createScreenShareFeature(context) {
         return { canTryAudio: hasGetDisplayMedia, issues };
     }
 
+    /** 根据是否采集系统音频生成 getDisplayMedia 约束。 */
     function getDisplayMediaConstraints(withAudio = true) {
         const video = {
             frameRate: { ideal: 60, max: 60 },
@@ -64,6 +56,7 @@ export function createScreenShareFeature(context) {
         };
     }
 
+    /** 检查当前本地用户是否已经发布屏幕共享音频 track。 */
     function hasPublishedScreenAudioTrack() {
         const room = context.getRoom();
         if (!room || !room.localParticipant) return false;
@@ -84,6 +77,7 @@ export function createScreenShareFeature(context) {
         }) || null;
     }
 
+    /** 显示本地屏幕预览；只做本地静音预览，不影响发布 track。 */
     function showLocalScreenPreview(track) {
         const previewBox = document.getElementById('local-screen-preview-box');
         const previewVideo = document.getElementById('local-screen-preview');
@@ -100,6 +94,7 @@ export function createScreenShareFeature(context) {
         previewBox.style.display = 'block';
     }
 
+    /** 关闭本地屏幕预览并清空 video.srcObject。 */
     function hideLocalScreenPreview() {
         const previewBox = document.getElementById('local-screen-preview-box');
         const previewVideo = document.getElementById('local-screen-preview');
@@ -123,6 +118,7 @@ export function createScreenShareFeature(context) {
         currentScreenTargetBitrate = 0;
     }
 
+    /** 从 RTCRtpSender stats 读取屏幕共享实际发送码率，用于调试画质。 */
     async function logCurrentScreenBitrate() {
         const pub = getLocalScreenPublication();
         const targetText = currentScreenTargetBitrate > 0
@@ -180,6 +176,7 @@ export function createScreenShareFeature(context) {
         }
     }
 
+    /** 开启屏幕共享码率定时日志。 */
     function startScreenBitrateMonitor(targetBitrate) {
         stopScreenBitrateMonitor();
         currentScreenTargetBitrate = targetBitrate;
@@ -188,6 +185,7 @@ export function createScreenShareFeature(context) {
         screenBitrateMonitorTimer = setInterval(logCurrentScreenBitrate, 2000);
     }
 
+    /** 屏幕共享主入口：开启时请求屏幕，关闭时停止 track、预览和码率监控。 */
     async function toggleScreen() {
         const room = context.getRoom();
         if (!room) return;

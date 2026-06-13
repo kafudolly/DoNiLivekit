@@ -31,16 +31,9 @@ import { createLivekitEventsFeature } from '../features/livekitEvents.js';
 import { createRustMicFeature } from '../features/rustMic.js';
 import { createRoomConnectionFeature } from '../features/roomConnection.js';
 
-// ------------------------------------------------------------
-// Application runtime / composition root
-// ------------------------------------------------------------
-// runtime.js 是前端运行时装配层：负责创建模块、连接依赖、同步轻量 store。
-// 具体业务已经拆到 features/，Vue 组件通过这里暴露的 action 调用业务：
-// - roomConnection.js：大厅、频道、连接/切换/离开；
-// - rustMic.js：Rust 9002 麦克风发布/停止/错误监听；
-// - livekitEvents.js：远端音视频 Track、成员事件、聊天 DataReceived；
-// - participants.js：成员列表和 active-speaker 高亮；
-// - audioPipelines.js：9001/9002 PCM -> AudioWorklet -> MediaStreamTrack。
+// 运行时装配层。
+// 只负责创建 feature、注入依赖、同步 appStore、暴露给 Vue/旧 onclick 的动作。
+// 不在这里直接写新的业务逻辑；新功能应落到 stores + features + components。
 
 let room = null;
 let isScreenOn = false;
@@ -53,14 +46,17 @@ const userVolumes = loadUserVolumesFromStorage();
 const audioPipelinesFeature = createAudioPipelinesFeature();
 let roomConnectionFeature;
 
+/** 将远端成员音量偏好写回 localStorage。 */
 function saveUserVolumesToStorage() {
     persistUserVolumesToStorage(userVolumes);
 }
 
+/** 确保某个成员拥有 mic/screen/appaudio 三类音量配置。 */
 function ensureParticipantVolumeState(identity) {
     return ensureParticipantVolumeStateFromStore(userVolumes, identity);
 }
 
+/** 延迟创建远端音频 AudioContext；用于 GainNode 音量控制和输出设备切换。 */
 function ensureAudioContext() {
     if (!remoteAudioContext) {
         const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -72,9 +68,7 @@ function ensureAudioContext() {
     return !!remoteAudioContext;
 }
 
-// ------------------------------
-// Feature modules
-// ------------------------------
+// 创建业务模块，并通过 context 注入它们需要的状态读写函数。
 const appAudioFeature = createAppAudioFeature({
     invoke,
     sanitizeText,
@@ -180,17 +174,15 @@ roomConnectionFeature = createRoomConnectionFeature({
 });
 
 
-// ------------------------------
-// Runtime store bridge
-// ------------------------------
-// 当前阶段仍有部分 legacy DOM 渲染。这里提供一个轻量状态快照，
-// 让后续新功能可以逐步迁移到 Vue store，而不需要一次性重写音频/LiveKit 链路。
+// appStore 同步桥。
+// 旧 DOM 渲染仍然存在，因此这里从运行时状态生成快照，供新 Vue 组件逐步迁移使用。
 let __syncScheduled = false;
 
 function getInputValue(id, fallback = '') {
     return document.getElementById(id)?.value ?? fallback;
 }
 
+/** 汇总当前运行时状态，供 appStore 和后续 Vue 响应式 UI 使用。 */
 function getRuntimeSnapshot() {
     return {
         serverIp: getInputValue('server-ip', localStorage.getItem('lk_server_ip') || DEFAULT_SERVER_IP),
@@ -211,6 +203,7 @@ function getRuntimeSnapshot() {
     };
 }
 
+/** 立即把运行时状态同步到轻量 store；失败只记录日志，不中断音频链路。 */
 function syncAppStore() {
     try {
         syncFromRuntimeSnapshot(getRuntimeSnapshot());
@@ -220,6 +213,7 @@ function syncAppStore() {
     }
 }
 
+/** 合并同一轮事件循环内的多次状态更新，减少重复 store 写入。 */
 function requestStoreSync() {
     if (__syncScheduled) return;
     __syncScheduled = true;
@@ -229,6 +223,7 @@ function requestStoreSync() {
     });
 }
 
+/** 包装异步动作：动作完成后统一同步 store，保证按钮状态和业务状态一致。 */
 function afterAction(result) {
     if (result && typeof result.finally === 'function') {
         return result.finally(syncAppStore);
@@ -237,9 +232,7 @@ function afterAction(result) {
     return result;
 }
 
-// ------------------------------
-// Thin wrappers kept for App.vue and inline onclick compatibility
-// ------------------------------
+// 兼容层封装：保持 App.vue 和少量旧 onclick 仍可调用原函数名。
 function initRustMicPipeline(sampleRate, wsUrl) { return audioPipelinesFeature.initRustMicPipeline(sampleRate, wsUrl); }
 function teardownRustMicPipeline() { return audioPipelinesFeature.teardownRustMicPipeline(); }
 function initLocalPcmPipeline(sampleRate, wsUrl) { return audioPipelinesFeature.initLocalPcmPipeline(sampleRate, wsUrl); }
@@ -294,6 +287,7 @@ function switchChannel(roomName) { return afterAction(roomConnectionFeature.swit
 function connectToChannel(targetRoomName, options) { return afterAction(roomConnectionFeature.connectToChannel(targetRoomName, options)); }
 function leaveRoom() { return afterAction(roomConnectionFeature.leaveRoom()); }
 
+/** 刷新麦克风下拉框；Tauri 模式走 Rust 设备枚举，浏览器模式走 LiveKit 设备枚举。 */
 async function updateMicList() {
     return updateMicListFromModule({
         isTauriClient,
@@ -302,6 +296,7 @@ async function updateMicList() {
     });
 }
 
+/** 切换麦克风设备；如果当前 Rust 麦克风已开启，会重启 9002 管线并重新 publish。 */
 async function switchMic(deviceId) {
     const result = await switchMicFromModule(deviceId, {
         isTauriClient,
@@ -324,12 +319,14 @@ async function switchMic(deviceId) {
     return result;
 }
 
+/** 刷新扬声器下拉框，并恢复上次选择。 */
 async function updateAudioOutputList() {
     return updateAudioOutputListFromModule({
         selectedAudioOutputId,
     });
 }
 
+/** 切换远端音频和耳返使用的输出设备。 */
 async function switchAudioOutput(deviceId) {
     selectedAudioOutputId = await switchAudioOutputFromModule(deviceId, {
         getRemoteAudioContext: () => remoteAudioContext,
@@ -338,7 +335,8 @@ async function switchAudioOutput(deviceId) {
     syncAppStore();
 }
 
-// ===== Vue3 migration entry: App.vue renders DOM, then calls this function. =====
+// Vue 挂载完成后执行一次 legacy DOM 初始化。
+/** 初始化登录区、频道列表和设备列表。只执行一次。 */
 function initLegacyDomBlock1() {
     const savedUser = localStorage.getItem('lk_username');
     if (savedUser) document.getElementById('username').value = savedUser;
@@ -351,6 +349,7 @@ function initLegacyDomBlock1() {
     updateAudioOutputList();
 }
 
+/** 绑定 VAD 阈值/增益滑块，并监听 Rust 侧 mic_volume 事件更新绿条。 */
 function initLegacyDomBlock2() {
     const slider = document.getElementById('vad-slider-input');
     const marker = document.getElementById('vad-threshold-marker');
@@ -394,6 +393,7 @@ function initLegacyDomBlock2() {
 
 let __legacyDomInitialized = false;
 
+/** Vue DOM 挂载后调用；负责连接保留的 DOM id 与旧业务逻辑。 */
 export function initLegacyDom() {
     if (__legacyDomInitialized) return;
     __legacyDomInitialized = true;

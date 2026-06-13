@@ -1,15 +1,10 @@
-# app/
+# app 目录说明
 
-`app/` 是前端运行时层。
+`app/runtime.js` 是前端运行时装配层：创建 feature、注入依赖、同步 store，并向 Vue 组件暴露动作。
 
-- `runtime.js`：创建并连接所有 features，向 Vue 组件暴露 action，向 store 同步轻量状态。
-- 新功能需要跨多个 feature 协调时，可以在这里做“装配”，但不要把业务细节写在这里。
+不要把新业务直接堆到 `runtime.js`。新增功能时：
 
-原则：
-
-```text
-components 负责显示
-stores 负责状态
-features 负责业务动作
-app/runtime 负责装配
-```
+1. 状态放 `stores/`。
+2. 业务动作放 `features/`。
+3. 页面结构放 `components/`。
+4. `runtime.js` 只负责把它们连接起来。

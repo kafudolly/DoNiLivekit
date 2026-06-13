@@ -4,7 +4,7 @@ html, body, #app { width: 100%; height: 100%; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1f22; color: #dbdee1; height: 100vh; display: flex; overflow: hidden; }
 
-/* 1. 修改侧边栏容器，允许其在极端情况下整体滚动 */
+/* 侧边栏容器：高度不足时整体滚动 */
 #sidebar { 
     width: 260px; 
     background-color: #2b2d31; 
@@ -30,7 +30,7 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
     gap: 6px; 
     margin-bottom: 14px; 
     
-    /* 强制留出空间，绝对不允许被压缩 */
+    /* 保留频道列表最小高度，避免被其他区域挤压 */
     min-height: 80px; 
     flex-shrink: 0; 
 }
@@ -51,7 +51,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #participant-list { 
     flex: 1; 
     
-    /* 🌟 核心修复：设定最小高度，绝对不准被其他控件挤压到 0 */
+    /* 设置最小高度，避免成员列表被底部控制区挤压到不可见 */
     min-height: 120px; 
     
     overflow-y: auto; 
@@ -84,7 +84,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     gap: 15px; overflow-y: auto; 
 }
 
-/* 🌟 核心修改：将原本给 video 的样式转移给 video-wrapper 包装盒 🌟 */
+/* 视频外层包装盒样式 */
 .video-wrapper { 
     flex: 1 1 40%; 
     min-width: 320px; 
@@ -95,7 +95,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     box-shadow: 0 8px 16px rgba(0,0,0,0.5); 
     cursor: pointer; 
     transition: transform 0.2s ease, box-shadow 0.2s ease; 
-    /* 关键点：开启相对定位，让内部的名字标签能基于它定位 */
+    /* 允许名字标签和控制按钮基于包装盒定位 */
     position: relative; 
     display: flex;
     overflow: hidden;
@@ -127,7 +127,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     padding-bottom: 20px; 
 }
 
-/* 🌟 核心：被单击选中的那个视频，变身主屏幕 */
+/* 聚焦的视频占据主屏幕区域 */
 .video-wrapper.focused {
     flex: 1 1 100%;
     max-width: 100%;
@@ -136,10 +136,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     order: -1; /* 绝对排在最前面 */
     z-index: 10;
     box-shadow: 0 12px 30px rgba(0,0,0,0.8);
-    border: 2px solid #5865f2; /* 加一个尊贵的蓝框高亮 */
+    border: 2px solid #5865f2; /* 聚焦高亮边框 */
 }
 
-/* 🌟 核心：当有视频被聚焦时，其他没被聚焦的视频，乖乖变成缩略图 */
+/* 聚焦模式下，其他视频缩为底部缩略图 */
 #video-container.has-focus .video-wrapper:not(.focused) {
     flex: 0 0 240px; /* 固定宽度 240px */
     max-width: 240px;
@@ -155,7 +155,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     transform: translateY(-4px);
 }
 
-/* 🌟 新增：名字标签的悬浮样式 🌟 */
+/* 视频左下角名字标签 */
 .video-name-label {
     position: absolute;
     bottom: 12px;
@@ -166,10 +166,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     border-radius: 6px;
     font-size: 13px;
     font-weight: 500;
-    pointer-events: none; /* 极其重要：让鼠标点击穿透它，不影响双击全屏 */
+    pointer-events: none; /* 点击穿透，避免影响视频双击全屏 */
     z-index: 10;
     box-shadow: 0 2px 6px rgba(0,0,0,0.5);
-    backdrop-filter: blur(4px); /* 加一点高贵的毛玻璃效果 */
+    backdrop-filter: blur(4px); /* 半透明背景的模糊效果 */
 }
 
 .screen-local-toggle-btn {
@@ -293,7 +293,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    🎮 左下角个人控制坞 (Discord 稳定版)
    ========================================= */
 
-/* 将控制面板死死顶在侧边栏最下方 */
+/* 控制面板固定在侧边栏底部 */
 #user-control-panel {
     margin-top: auto; 
     background-color: #232428; /* 比侧边栏更深一点的颜色，凸显层次 */

@@ -1,14 +1,14 @@
 import { USER_VOLUME_STORAGE_KEY } from '../shared/constants.js';
 import { logError } from '../shared/errors.js';
 
-// Participant volume values are normalized as gain values in the range 0~3.
-// UI sliders use 0~300 percent, so normalizeGainValue accepts both formats.
+// 远端成员音量统一存成 0~3 的 gain 值；界面滑块显示为 0~300%。
 
+/** 把滑块百分比或旧版 gain 值统一转换成 0~3 的 gain。 */
 export function normalizeGainValue(rawValue) {
     const n = Number(rawValue);
     if (!Number.isFinite(n)) return 1;
 
-    // Support both legacy 0~3 gain values and current 0~300 percent slider values.
+    // 兼容旧数据格式：历史版本可能直接保存 0~3，新版本滑块传入 0~300。
     const gain = n > 3 ? n / 100 : n;
     return Math.max(0, Math.min(gain, 3));
 }
@@ -21,6 +21,7 @@ export function getDefaultVolumeState() {
     return { mic: 1, screen: 1, appaudio: 1 };
 }
 
+/** 读取并修正 localStorage 中的成员音量配置，坏数据会被自动忽略。 */
 export function loadUserVolumesFromStorage() {
     try {
         const raw = localStorage.getItem(USER_VOLUME_STORAGE_KEY);
@@ -48,6 +49,7 @@ export function loadUserVolumesFromStorage() {
     }
 }
 
+/** 保存远端成员音量配置；保存失败只打印警告，不影响通话。 */
 export function saveUserVolumesToStorage(userVolumes) {
     try {
         localStorage.setItem(USER_VOLUME_STORAGE_KEY, JSON.stringify(userVolumes));
@@ -56,6 +58,7 @@ export function saveUserVolumesToStorage(userVolumes) {
     }
 }
 
+/** 确保某个成员拥有完整的 mic/screen/appaudio 音量字段。 */
 export function ensureParticipantVolumeState(userVolumes, identity) {
     const key = String(identity || 'unknown');
 

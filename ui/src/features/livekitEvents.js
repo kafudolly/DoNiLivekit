@@ -1,25 +1,16 @@
 import { alertError, logError } from '../shared/errors.js';
 
-/**
- * LiveKit event binding module.
- *
- * 负责把 LiveKit RoomEvent 绑定到 DOM：
- * - 远端视频挂载、屏幕分享包装盒、单击聚焦、双击全屏；
- * - 远端音频挂载，并交给 remoteAudio.js 的 GainNode 做音量控制；
- * - 成员加入/离开、静音状态、Track 发布/取消发布、活跃说话者；
- * - DataReceived 聊天消息分发。
- *
- * 这里不创建 Room、不连接服务器、不发布本地麦克风，只处理“已经连接后的事件响应”。
- */
-
+/** 创建 LiveKit 事件模块；集中绑定远端 Track、成员和 DataChannel 事件。 */
 export function createLivekitEventsFeature(context) {
     const localScreenControls = {};
     let clickTimer = null;
 
+    /** 判断 publication 是否为屏幕共享视频源。 */
     function isScreenShareSource(source) {
         return source === context.LivekitClient.Track.Source.ScreenShare || source === 'screen_share';
     }
 
+    /** 判断音频 track 是否为 Rust 9001 发布的 app-audio。 */
     function isAppAudioPublication(track, publication) {
         const trackName = publication?.trackName || publication?.name || track?.name || '';
         return trackName === 'app-audio';
@@ -45,6 +36,7 @@ export function createLivekitEventsFeature(context) {
         `;
     }
 
+    /** 本地屏蔽/恢复某个远端屏幕共享，不影响其他成员订阅。 */
     async function toggleLocalScreenSubscription(identity) {
         const state = localScreenControls[identity];
         if (!state || !state.publication) return;
@@ -72,6 +64,7 @@ export function createLivekitEventsFeature(context) {
         });
     }
 
+    /** 给当前 LiveKit Room 绑定事件；每次新建 Room 后必须调用一次。 */
     function registerRoomEvents(room) {
         if (!room) return;
 

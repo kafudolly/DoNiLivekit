@@ -21,8 +21,7 @@ import {
 } from './app/runtime.js';
 
 // App.vue 只负责页面骨架和事件转发。
-// 运行时统一放在 app/runtime.js；业务模块放在 features/；状态模型放在 stores/。
-// 这里不直接写 LiveKit / Tauri / AudioWorklet 逻辑，方便后续继续升级 Discord-like UI。
+// 具体业务统一进入 app/runtime.js；不要在这里直接调用 LiveKit、Tauri 或 AudioWorklet。
 onMounted(async () => {
   await nextTick();
   initLegacyDom();

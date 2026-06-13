@@ -1,18 +1,6 @@
 import { alertError, formatError, logError } from '../shared/errors.js';
 
-/**
- * Rust microphone publish module.
- *
- * 负责 9002 Rust 麦克风“发布到 LiveKit”的这一层：
- * - 查询 Rust 侧麦克风采样率；
- * - 启停 Rust 麦克风采集；
- * - 使用 audioPipelines.js 创建 MediaStreamTrack；
- * - publishTrack/unpublishTrack；
- * - 开关按钮、耳返按钮显示、mic_error 监听。
- *
- * 注意：这里不直接处理 PCM WebSocket 和 AudioWorklet，那部分已经在 audioPipelines.js。
- */
-
+/** 创建 Rust 麦克风发布模块；负责把 9002 产生的 track 发布成 LiveKit microphone。 */
 export function createRustMicFeature(context) {
     let isMicOn = false;
     let currentMicSource = context.isTauriClient ? 'rust' : 'browser';
@@ -21,6 +9,7 @@ export function createRustMicFeature(context) {
     let hasRegisteredRustMicErrorListener = false;
     let lastRustMicErrorAt = 0;
 
+    /** 浏览器麦克风 fallback 的约束配置，Rust 麦克风不使用这组参数。 */
     function getMicCaptureOptions() {
         return {
             echoCancellation: true,
@@ -43,6 +32,7 @@ export function createRustMicFeature(context) {
         if (monitorBtn) monitorBtn.style.display = 'none';
     }
 
+    /** 根据当前麦克风来源和开关状态刷新左下角麦克风按钮。 */
     function updateMicSourceButton() {
         const btn = document.getElementById('btn-mic');
         if (!btn) return;
@@ -58,6 +48,7 @@ export function createRustMicFeature(context) {
         }
     }
 
+    /** 在浏览器麦克风和 Rust 麦克风之间切换；已开麦时会自动切换发布源。 */
     function switchMicSource(source) {
         if (source !== 'browser' && source !== 'rust') return;
         if (currentMicSource === source) return;
@@ -88,6 +79,7 @@ export function createRustMicFeature(context) {
         }
     }
 
+    /** 启动 Rust 采集、初始化 9002 管线，并 publish 为 LiveKit microphone track。 */
     async function startRustMicShare() {
         const room = context.getRoom();
         if (!room || !room.localParticipant) {
@@ -157,6 +149,7 @@ export function createRustMicFeature(context) {
         }
     }
 
+    /** 停止 Rust 麦克风发布并释放 9002 管线。 */
     async function stopRustMicShare() {
         await context.invoke('toggle_rust_mic', { enable: false }).catch((error) => {
             logError('rustMic/stopRustMicShare 关闭 Rust 采集状态失败', error, 'warn');
@@ -177,6 +170,7 @@ export function createRustMicFeature(context) {
         }
     }
 
+    /** 旧按钮兼容入口：只切换 Rust 麦克风，不处理浏览器麦克风。 */
     async function toggleRustMicShare() {
         const btn = document.getElementById('btn-rust-mic');
         if (!isRustMicOn) {
@@ -200,6 +194,7 @@ export function createRustMicFeature(context) {
         }
     }
 
+    /** 主麦克风按钮入口：Tauri 默认走 Rust 麦克风，浏览器环境走 LiveKit 本地麦克风。 */
     async function toggleMic() {
         const btn = document.getElementById('btn-mic');
         const room = context.getRoom();
@@ -246,6 +241,7 @@ export function createRustMicFeature(context) {
         await context.updateMicList();
     }
 
+    /** 监听 Rust 后端 mic_error，避免同一秒内重复弹窗。 */
     function registerRustMicErrorListener() {
         if (hasRegisteredRustMicErrorListener) return;
         hasRegisteredRustMicErrorListener = true;

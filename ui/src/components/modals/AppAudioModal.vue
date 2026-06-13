@@ -3,11 +3,7 @@ defineEmits(['close', 'confirm']);
 </script>
 
 <template>
-  <!--
-    应用音频选择弹窗。
-    进程列表由 appAudio.js 动态写入 #app-audio-process-list；
-    这里保留原 id 和 class，保证 9001 应用音频共享链路不变。
-  -->
+  <!-- 应用音频弹窗：进程列表由 appAudio.js 写入 #app-audio-process-list。 -->
   <div id="app-audio-modal" class="modal hidden" @click="$emit('close', $event)">
     <div class="modal-card" @click.stop>
       <div class="modal-header">

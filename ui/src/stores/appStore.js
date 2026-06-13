@@ -1,17 +1,9 @@
 import { reactive } from 'vue';
 import { DEFAULT_SERVER_IP } from '../shared/constants.js';
 
-/**
- * Central frontend state model.
- *
- * 这个 store 是后续继续加功能的“状态层入口”。当前项目仍保留部分 legacy DOM 渲染，
- * 但新功能应优先读写这里，而不是继续散落在 client.js 或组件内部。
- *
- * 约定：
- * - store 只保存可序列化/轻量状态，不保存 AudioContext、MediaStreamTrack、LiveKit Room 等重对象；
- * - 重对象仍由 features/ 中的 service 模块持有；
- * - 组件只根据 store 显示 UI，业务动作通过 app/runtime.js 暴露的 actions 调用。
- */
+// 前端轻量状态入口。
+// 只保存可序列化状态；AudioContext、MediaStreamTrack、LiveKit Room 等重对象必须留在 features 中。
+// 新组件优先读取这里，业务动作仍通过 app/runtime.js 调用。
 export const appStore = reactive({
     app: {
         booted: false,
@@ -46,27 +38,26 @@ export const appStore = reactive({
     },
 });
 
+/** 按 section 合并更新 store，并刷新 lastUpdatedAt。 */
 export function patchStore(section, values) {
     if (!appStore[section] || !values || typeof values !== 'object') return;
     Object.assign(appStore[section], values);
     appStore.ui.lastUpdatedAt = Date.now();
 }
 
+/** 标记 Vue 与 legacy DOM 初始化完成。 */
 export function markAppBooted() {
     appStore.app.booted = true;
     appStore.ui.lastUpdatedAt = Date.now();
 }
 
+/** 记录最近一次非致命错误，供后续错误提示或调试面板使用。 */
 export function setLastError(error) {
     appStore.ui.lastError = error ? String(error?.message || error) : null;
     appStore.ui.lastUpdatedAt = Date.now();
 }
 
-/**
- * 从现有 legacy/runtime 快照同步状态。
- *
- * 这是安全迁移阶段的桥：老业务链路继续稳定运行，新 Vue 组件和后续功能可以从 store 读取状态。
- */
+/** 从 runtime 快照同步状态；用于让新 Vue 组件读取旧业务链路的状态。 */
 export function syncFromRuntimeSnapshot(snapshot = {}) {
     if ('serverIp' in snapshot || 'username' in snapshot || 'isConnected' in snapshot || 'currentChannel' in snapshot || 'channels' in snapshot || 'isInLobby' in snapshot) {
         patchStore('connection', {

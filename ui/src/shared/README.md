@@ -1,8 +1,8 @@
-# Shared utilities
+# shared 目录说明
 
-This folder contains small, side-effect-light helpers shared across features.
+`shared/` 存放不会持有业务状态的通用代码。
 
-- `tauri.js`: Tauri invoke/listen compatibility wrapper.
-- `constants.js`: Cross-module constants.
-- `text.js`: HTML escaping helpers.
-- `errors.js`: User-facing and console error formatting helpers.
+- `tauri.js`：统一封装 Tauri `invoke/listen`。
+- `constants.js`：多个模块共同依赖的常量。
+- `text.js`：legacy DOM 渲染使用的文本转义。
+- `errors.js`：统一错误消息、日志和弹窗格式。

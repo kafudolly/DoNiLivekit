@@ -3,11 +3,7 @@ defineEmits(['send']);
 </script>
 
 <template>
-  <!--
-    局域网聊天面板。
-    消息渲染仍由 chat.js 写入 #chat-messages，发送时调用 sendChatMessage()，
-    保持和 LiveKit DataPacket 收发逻辑一致。
-  -->
+  <!-- 保留 #chat-messages 作为 DataChannel 消息渲染容器；发送事件交给 chat.js 处理。 -->
   <aside id="chat-panel">
     <div class="chat-header">💬 局域网聊天</div>
     <div id="chat-messages">

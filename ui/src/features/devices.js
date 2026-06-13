@@ -1,9 +1,8 @@
 import { alertError, getErrorMessage, logError } from '../shared/errors.js';
 
 /**
- * Return a user-friendly microphone name.
- * Windows endpoint IDs are long and unreadable, so only fall back to generic names
- * when the value looks like an endpoint id instead of a real device label.
+ * 返回适合显示的麦克风名称。
+ * 只有在 Rust 返回值看起来像 Windows Endpoint ID 时，才回退成“麦克风 N”。
  */
 export function getCleanMicDeviceLabel(device, index) {
     const rawName = String(device?.name || '').trim();
@@ -19,6 +18,7 @@ export function getCleanMicDeviceLabel(device, index) {
     return `麦克风 ${index + 1}`;
 }
 
+/** 刷新输入设备列表；Tauri 使用 Rust 枚举，浏览器使用 LiveKit 枚举。 */
 export async function updateMicList({ isTauriClient, invoke, LivekitClient }) {
     const selectEl = document.getElementById('mic-select');
     if (!selectEl) return;
@@ -80,6 +80,7 @@ export async function updateMicList({ isTauriClient, invoke, LivekitClient }) {
     }
 }
 
+/** 切换输入设备；Rust 麦克风开启时必须重启采集和重新发布 track。 */
 export async function switchMic(deviceId, context) {
     const {
         isTauriClient,
@@ -132,6 +133,7 @@ export async function switchMic(deviceId, context) {
     }
 }
 
+/** 刷新输出设备列表，并选中上次保存的扬声器。 */
 export async function updateAudioOutputList({ selectedAudioOutputId }) {
     const selectEl = document.getElementById('audio-output-select');
     if (!selectEl) return;
@@ -165,6 +167,7 @@ export async function updateAudioOutputList({ selectedAudioOutputId }) {
     }
 }
 
+/** 切换输出设备；同时作用于远端音频 AudioContext 和 Rust 麦克风耳返。 */
 export async function switchAudioOutput(deviceId, context) {
     const selectedAudioOutputId = deviceId || 'default';
     localStorage.setItem('lk_audio_output', selectedAudioOutputId);

@@ -1,8 +1,5 @@
-// Tauri API compatibility wrapper.
-//
-// Tauri v2 exposes `window.__TAURI__.core.invoke`; some older examples use
-// `window.__TAURI__.tauri.invoke`. This wrapper keeps feature modules independent
-// from the exact runtime shape and provides a clear error outside Tauri.
+// 统一封装 Tauri API，避免各业务模块直接依赖 window.__TAURI__ 的具体版本结构。
+// 前端只能通过这里调用 Rust command 或监听 Rust event。
 
 export const invoke = window.__TAURI__?.core?.invoke
     ? (...args) => window.__TAURI__.core.invoke(...args)

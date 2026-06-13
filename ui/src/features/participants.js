@@ -1,15 +1,4 @@
-/**
- * Participants module.
- *
- * 负责成员列表和“正在说话”状态：
- * - 渲染左侧成员列表；
- * - 渲染每个远端用户的麦克风/屏幕/应用音频音量滑块；
- * - 根据 LiveKit ActiveSpeakersChanged 事件维护 active-speaker 高亮；
- * - 保存和读取用户音量的具体逻辑仍由 participantVolumes.js 提供。
- *
- * 这个模块不连接 LiveKit，也不发布/订阅音轨，只做 UI 渲染和轻量状态维护。
- */
-
+/** 创建成员列表模块；负责成员卡片渲染、音量滑块和说话高亮。 */
 export function createParticipantsFeature(context) {
     const activeSpeakerIdentities = new Set();
     const activeSpeakerDebounceTimers = {};
@@ -26,6 +15,7 @@ export function createParticipantsFeature(context) {
         activeSpeakerIdentities.clear();
     }
 
+    /** 标记成员正在说话；用于 LiveKit active speaker 回调。 */
     function markParticipantAsActiveSpeaker(identity) {
         if (!identity) return false;
         if (activeSpeakerDebounceTimers[identity]) {
@@ -37,6 +27,7 @@ export function createParticipantsFeature(context) {
         return true;
     }
 
+    /** 延迟关闭说话高亮，避免音量抖动导致 UI 闪烁。 */
     function scheduleParticipantActiveSpeakerOff(identity) {
         if (!identity || !activeSpeakerIdentities.has(identity)) return;
         if (activeSpeakerDebounceTimers[identity]) return;
@@ -48,6 +39,7 @@ export function createParticipantsFeature(context) {
         }, context.activeSpeakerDebounceMs);
     }
 
+    /** 根据当前 LiveKit 本地/远端成员重新渲染成员列表和音量滑块。 */
     function updateParticipantList() {
         const room = context.getRoom();
         const listEl = document.getElementById('participant-list');
@@ -121,6 +113,7 @@ export function createParticipantsFeature(context) {
         if (userCount) userCount.innerText = count;
     }
 
+    /** 只更新 active-speaker class，不重建整个成员列表。 */
     function updateActiveSpeakerUI() {
         document.querySelectorAll('.user-item').forEach(el => {
             const identity = el.id.replace('user-item-', '');

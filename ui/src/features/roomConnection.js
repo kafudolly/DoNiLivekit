@@ -1,20 +1,6 @@
 import { alertError, logError } from '../shared/errors.js';
 
-/**
- * Room and channel connection module.
- *
- * 负责大厅/频道这一层状态：
- * - 服务器地址解析；
- * - 频道列表渲染、刷新和轮询；
- * - 创建频道；
- * - 进入大厅、连接 LiveKit 频道；
- * - 切频道时按原顺序停止本地资源、disconnect、connect、恢复麦克风；
- * - 离开房间时释放关键资源。
- *
- * 这里不直接实现 Rust 麦克风底层管线，也不直接实现 LiveKit RoomEvent 处理。
- * 这些分别交给 rustMic.js、audioPipelines.js、livekitEvents.js。
- */
-
+/** 创建房间连接模块；维护大厅、频道列表、当前频道和切频道状态。 */
 export function createRoomConnectionFeature(context) {
     let currentChannel = null;
     let isInLobby = false;
@@ -25,6 +11,7 @@ export function createRoomConnectionFeature(context) {
     let shouldRestoreMicAfterChannelSwitch = false;
     let isSwitchingChannel = false;
 
+    /** 规范化服务器输入，允许用户输入 http/ws 前缀但内部只保留 host:port。 */
     function normalizeServerInput(rawValue) {
         let val = (rawValue || '').trim();
         if (!val) return context.defaultServerIp;
@@ -33,6 +20,7 @@ export function createRoomConnectionFeature(context) {
         return val;
     }
 
+    /** 从输入框生成 API 地址和 LiveKit WebSocket 地址。 */
     function getServerConfig() {
         const inputEl = document.getElementById('server-ip');
         const normalized = normalizeServerInput(inputEl ? inputEl.value : '');
@@ -51,6 +39,7 @@ export function createRoomConnectionFeature(context) {
         return { apiBase, livekitWs, persistValue: `${host}:${apiPort}` };
     }
 
+    /** 渲染频道列表；onclick 保留为兼容入口，实际调用 runtime.switchChannel。 */
     function renderChannelList() {
         const list = document.getElementById('channel-list');
         if (!list) return;
@@ -72,6 +61,7 @@ export function createRoomConnectionFeature(context) {
         }).join('');
     }
 
+    /** 从后端 /api/rooms 拉取频道和在线成员，用于大厅轮询。 */
     async function refreshRoomsFromServer() {
         const serverConfig = getServerConfig();
         const response = await fetch(`${serverConfig.apiBase}/api/rooms`);
@@ -98,6 +88,7 @@ export function createRoomConnectionFeature(context) {
         renderChannelList();
     }
 
+    /** 房间轮询主循环；每轮请求完成后再安排下一轮，避免请求堆积。 */
     async function pollRooms() {
         if (!isInLobby || !isPolling) return;
 
@@ -126,6 +117,7 @@ export function createRoomConnectionFeature(context) {
         }
     }
 
+    /** 调用后端创建频道，成功后刷新列表并切入新频道。 */
     async function createChannel() {
         const value = prompt('输入新频道名（英文字母/数字/短横线）:');
         if (!value) return;
@@ -155,6 +147,7 @@ export function createRoomConnectionFeature(context) {
         }
     }
 
+    /** 断开房间后重置 DOM、按钮、远端音频路由和本地屏幕预览。 */
     function resetRoomUIAfterDisconnect() {
         document.getElementById('video-container').innerHTML = '';
         document.getElementById('audio-container').innerHTML = '';
@@ -191,6 +184,7 @@ export function createRoomConnectionFeature(context) {
         context.appAudio.closeAppAudioModal();
     }
 
+    /** 进入大厅：保存用户名/服务器地址，启动频道轮询，并按配置自动加入第一个频道。 */
     async function joinRoom(options = {}) {
         const autoJoinFirstChannel = options.autoJoinFirstChannel !== false;
         const username = document.getElementById('username').value.trim();
@@ -219,6 +213,7 @@ export function createRoomConnectionFeature(context) {
         }
     }
 
+    /** 切换频道：按固定顺序停止本地发布、disconnect、connect，再恢复原来的麦克风状态。 */
     async function switchChannel(roomName) {
         if (!isInLobby) {
             await joinRoom({ autoJoinFirstChannel: false });
@@ -304,6 +299,7 @@ export function createRoomConnectionFeature(context) {
         }
     }
 
+    /** 连接指定 LiveKit 房间，并启用按钮、设备列表、事件绑定和自动开麦。 */
     async function connectToChannel(targetRoomName, options = {}) {
         const autoMic = options.autoMic !== false;
         const username = document.getElementById('username').value.trim();
@@ -375,6 +371,7 @@ export function createRoomConnectionFeature(context) {
         }
     }
 
+    /** 主动离开房间；释放麦克风、应用音频、屏幕共享和远端音频资源。 */
     async function leaveRoom() {
         if (context.isTauriClient && context.rustMic.getIsMicOn()) {
             await context.rustMic.stopRustMicShare();

@@ -1,13 +1,5 @@
-# components/
+# components 目录说明
 
-组件按 UI 领域分组，方便后续改成 Discord-like 布局。
+`components/` 只负责页面结构和事件转发，不直接调用 Rust、LiveKit 或 AudioWorklet。
 
-```text
-sidebar/   频道、成员、登录、VAD 面板
-controls/  左下角用户控制坞
-main/      主舞台、视频/屏幕共享区域
-chat/      聊天区
-modals/    弹窗
-```
-
-新 UI 组件优先放在对应领域目录下，不要混回 features 或 legacy。
+当前仍保留部分稳定 DOM id，供 legacy 兼容层和 feature 模块挂载远端媒体、成员列表和设备控件。

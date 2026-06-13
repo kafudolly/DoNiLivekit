@@ -1,15 +1,10 @@
 import { logError } from '../shared/errors.js';
 
-/**
- * 远端音频路由与音量模块。
- *
- * 负责把 LiveKit 远端音频轨道接入 AudioContext + GainNode，
- * 并把每个用户、每种音源（麦克风/屏幕/应用音频）的音量保存到 localStorage。
- */
-
+/** 创建远端音频路由模块；优先用 GainNode 控制每个成员/音源音量。 */
 export function createRemoteAudioFeature(context) {
     const remoteAudioGainNodes = {};
 
+    /** 为远端 track 建立 GainNode 路由，并套用该成员已保存的音量。 */
     function addRemoteGainNode(identity, source, track, audioEl) {
         const volumes = context.ensureParticipantVolumeState(identity);
         const gain = volumes[source] !== undefined ? volumes[source] : 1;
@@ -46,6 +41,7 @@ export function createRemoteAudioFeature(context) {
         remoteAudioGainNodes[key].push(audioEl);
     }
 
+    /** 断开所有远端音频 GainNode，通常在离开房间或重连时调用。 */
     function clearRemoteGainNodes() {
         Object.keys(remoteAudioGainNodes).forEach(key => {
             remoteAudioGainNodes[key].forEach((audioEl) => {
@@ -56,6 +52,7 @@ export function createRemoteAudioFeature(context) {
         });
     }
 
+    /** 按 trackSid 清理某一路远端音频，避免 TrackUnsubscribed 后残留播放链路。 */
     function removeRemoteAudioRouteByTrackSid(trackSid) {
         if (!trackSid) return;
         Object.keys(remoteAudioGainNodes).forEach((key) => {
@@ -69,6 +66,7 @@ export function createRemoteAudioFeature(context) {
         });
     }
 
+    /** 更新某个成员某类音源的音量，并立即写入 GainNode 与 localStorage。 */
     function setParticipantVolume(identity, source, volumeValue) {
         context.ensureAudioContext();
         const volumes = context.ensureParticipantVolumeState(identity);

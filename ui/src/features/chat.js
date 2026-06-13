@@ -1,12 +1,8 @@
 import { logError } from '../shared/errors.js';
 
-/**
- * 聊天模块。
- *
- * 这里仍然使用 LiveKit data channel，不引入 Vue state，保证和旧版逻辑兼容。
- */
-
+/** 创建聊天模块；消息通过 LiveKit DataChannel 发送，渲染仍写入 #chat-messages。 */
 export function createChatFeature(context) {
+    /** 发送当前输入框内容，并在本地立即追加一条 self 消息。 */
     async function sendChatMessage() {
         const room = context.getRoom();
         if (!room || !room.localParticipant) return;
@@ -27,6 +23,7 @@ export function createChatFeature(context) {
         }
     }
 
+    /** 渲染一条聊天消息；sender/text 必须先转义后写入 innerHTML。 */
     function renderChatMessage(sender, text, isSelf) {
         const messagesDiv = document.getElementById('chat-messages');
         if (!messagesDiv) return;
