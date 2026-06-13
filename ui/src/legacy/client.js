@@ -1,17 +1,28 @@
-const DEFAULT_SERVER_IP = '10.126.126.10:5000';
-const invoke = window.__TAURI__?.core?.invoke
-    ? (...args) => window.__TAURI__.core.invoke(...args)
-    : window.__TAURI__?.tauri?.invoke
-    ? (...args) => window.__TAURI__.tauri.invoke(...args)
-    : async () => { throw new Error('Tauri invoke 不可用，请在 Tauri 环境运行'); };
-
-const listen = window.__TAURI__?.event?.listen
-    ? (...args) => window.__TAURI__.event.listen(...args)
-    : (..._args) => { console.warn('Tauri listen 不可用，事件将不会接收。'); };
-
-// 🌟 核心环境探针：用来判断我们是在 Tauri 里，还是在普通 Chrome 浏览器里
-const isTauriClient = !!window.__TAURI__;
-const AUTO_JOIN_FIRST_CHANNEL_AFTER_LOBBY = true; // 点击“进入大厅”后自动进入第一个语音频道，并触发自动开麦
+import { invoke, listen, isTauriClient } from '../shared/tauri.js';
+import {
+    DEFAULT_SERVER_IP,
+    AUTO_JOIN_FIRST_CHANNEL_AFTER_LOBBY,
+    ACTIVE_SPEAKER_LEVEL_THRESHOLD,
+    ACTIVE_SPEAKER_DEBOUNCE_MS,
+} from '../shared/constants.js';
+import { sanitizeText } from '../shared/text.js';
+import {
+    updateMicList as updateMicListFromModule,
+    switchMic as switchMicFromModule,
+    updateAudioOutputList as updateAudioOutputListFromModule,
+    switchAudioOutput as switchAudioOutputFromModule,
+} from '../features/devices.js';
+import {
+    normalizeGainValue,
+    gainToPercent,
+    loadUserVolumesFromStorage,
+    saveUserVolumesToStorage as persistUserVolumesToStorage,
+    ensureParticipantVolumeState as ensureParticipantVolumeStateFromStore,
+} from '../features/participantVolumes.js';
+import { createAppAudioFeature } from '../features/appAudio.js';
+import { createScreenShareFeature } from '../features/screenShare.js';
+import { createChatFeature } from '../features/chat.js';
+import { createRemoteAudioFeature } from '../features/remoteAudio.js';
 
 let room;
 let currentChannel = null;
@@ -24,13 +35,8 @@ let isPolling = false;
 let isMicOn = false;
 let currentMicSource = isTauriClient ? 'rust' : 'browser';
 let isScreenOn = false;
-const USER_VOLUME_STORAGE_KEY = 'lk_user_volumes_v1';
 const userVolumes = loadUserVolumesFromStorage();
-let screenBitrateMonitorTimer = null;
-let lastScreenOutboundStats = null;
-let currentScreenTargetBitrate = 0;
 const localScreenControls = {};
-let currentLocalScreenTrack = null;
 let remoteAudioContext = null;
 let localPcmAudioContext = null;
 let localPcmWorkletNode = null;
@@ -56,77 +62,74 @@ let isSwitchingChannel = false;
 let hasRegisteredRustMicErrorListener = false;
 let lastRustMicErrorAt = 0;
 
-const selectedAppAudioPids = new Set();
-const remoteAudioGainNodes = {};
 const activeSpeakerIdentities = new Set();
 const activeSpeakerDebounceTimers = {};
-const ACTIVE_SPEAKER_LEVEL_THRESHOLD = 0.05;  // 音频能量水平阈值，超过则认为是活跃说话者
-const ACTIVE_SPEAKER_DEBOUNCE_MS = 100;        // 活跃说话者状态的防抖时间，避免频繁闪烁
 let selectedAudioOutputId = localStorage.getItem('lk_audio_output') || 'default';
 
-function getDefaultVolumeState() {
-    return { mic: 1, screen: 1, appaudio: 1 };
-}
+// ------------------------------
+// Feature modules
+// ------------------------------
+// 这些模块仍通过 context 访问 client.js 中的 LiveKit/Audio 状态。
+// 这样可以明显缩短 client.js，同时避免一次性迁移过多状态造成音频链路不稳定。
+const appAudioFeature = createAppAudioFeature({
+    invoke,
+    sanitizeText,
+    getRoom: () => room,
+    getIsAppAudioSharing: () => isAppAudioSharing,
+    setIsAppAudioSharing: (value) => { isAppAudioSharing = value; },
+    getLocalAppAudioPublication: () => localAppAudioPublication,
+    setLocalAppAudioPublication: (value) => { localAppAudioPublication = value; },
+    initLocalPcmPipeline,
+    teardownLocalPcmPipeline,
+});
 
-function loadUserVolumesFromStorage() {
-    try {
-        const raw = localStorage.getItem(USER_VOLUME_STORAGE_KEY);
-        if (!raw) return {};
-        const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== 'object') return {};
+const screenShareFeature = createScreenShareFeature({
+    LivekitClient,
+    getRoom: () => room,
+    getIsScreenOn: () => isScreenOn,
+    setIsScreenOn: (value) => { isScreenOn = value; },
+});
 
-        const normalized = {};
-        Object.entries(parsed).forEach(([identity, value]) => {
-            if (!identity || !value || typeof value !== 'object') return;
-            normalized[identity] = getDefaultVolumeState();
-            ['mic', 'screen', 'appaudio'].forEach((source) => {
-                if (value[source] !== undefined) {
-                    normalized[identity][source] = normalizeGainValue(value[source]);
-                }
-            });
-        });
-        return normalized;
-    } catch (e) {
-        console.warn('读取成员音量设置失败，使用默认音量:', e);
-        return {};
-    }
-}
+const chatFeature = createChatFeature({
+    getRoom: () => room,
+    sanitizeText,
+});
+
+const remoteAudioFeature = createRemoteAudioFeature({
+    ensureAudioContext,
+    getRemoteAudioContext: () => remoteAudioContext,
+    ensureParticipantVolumeState,
+    normalizeGainValue,
+    saveUserVolumesToStorage,
+});
+
+// 保留同名包装函数，兼容 App.vue 和动态 innerHTML 里的 onclick。
+function updateAppAudioButtons() { return appAudioFeature.updateAppAudioButtons(); }
+function closeAppAudioModal(event) { return appAudioFeature.closeAppAudioModal(event); }
+function handleAppAudioClick() { return appAudioFeature.handleAppAudioClick(); }
+function openAppAudioModal() { return appAudioFeature.openAppAudioModal(); }
+function toggleAppAudioProcessSelection(pid) { return appAudioFeature.toggleAppAudioProcessSelection(pid); }
+function confirmAppAudioSelection() { return appAudioFeature.confirmAppAudioSelection(); }
+function stopAppAudioShare() { return appAudioFeature.stopAppAudioShare(); }
+function toggleScreen() { return screenShareFeature.toggleScreen(); }
+function stopScreenBitrateMonitor() { return screenShareFeature.stopScreenBitrateMonitor(); }
+function hideLocalScreenPreview() { return screenShareFeature.hideLocalScreenPreview(); }
+function showLocalScreenPreview(track) { return screenShareFeature.showLocalScreenPreview(track); }
+function getLocalScreenPublication() { return screenShareFeature.getLocalScreenPublication(); }
+function hasPublishedScreenAudioTrack() { return screenShareFeature.hasPublishedScreenAudioTrack(); }
+function sendChatMessage() { return chatFeature.sendChatMessage(); }
+function renderChatMessage(sender, text, isSelf) { return chatFeature.renderChatMessage(sender, text, isSelf); }
+function addRemoteGainNode(identity, source, track, audioEl) { return remoteAudioFeature.addRemoteGainNode(identity, source, track, audioEl); }
+function clearRemoteGainNodes() { return remoteAudioFeature.clearRemoteGainNodes(); }
+function removeRemoteAudioRouteByTrackSid(trackSid) { return remoteAudioFeature.removeRemoteAudioRouteByTrackSid(trackSid); }
+function setParticipantVolume(identity, source, volumeValue) { return remoteAudioFeature.setParticipantVolume(identity, source, volumeValue); }
 
 function saveUserVolumesToStorage() {
-    try {
-        localStorage.setItem(USER_VOLUME_STORAGE_KEY, JSON.stringify(userVolumes));
-    } catch (e) {
-        console.warn('保存成员音量设置失败:', e);
-    }
+    persistUserVolumesToStorage(userVolumes);
 }
 
 function ensureParticipantVolumeState(identity) {
-    const key = String(identity || 'unknown');
-    if (!userVolumes[key]) {
-        userVolumes[key] = getDefaultVolumeState();
-    }
-    ['mic', 'screen', 'appaudio'].forEach((source) => {
-        if (userVolumes[key][source] === undefined) {
-            userVolumes[key][source] = 1;
-        } else {
-            userVolumes[key][source] = normalizeGainValue(userVolumes[key][source]);
-        }
-    });
-    return userVolumes[key];
-}
-
-function getCleanMicDeviceLabel(device, index) {
-    const rawName = String(device?.name || '').trim();
-
-    // Windows Endpoint ID 会长得像 {0.0.1.00000000}.{...}，不适合直接显示给用户。
-    // 但真实设备名可能较长，例如“默认值 - 麦克风 (HECATE G4 Pro) (35bb:a164)”，不能因为长就替换成“麦克风 1”。
-    const looksLikeEndpointId =
-        rawName.includes('{0.0.') ||
-        rawName.includes('\\?') ||
-        /^麦克风\s*\{0\.0\./i.test(rawName);
-
-    if (rawName && !looksLikeEndpointId) return rawName;
-    return `麦克风 ${index + 1}`;
+    return ensureParticipantVolumeStateFromStore(userVolumes, identity);
 }
 
 function clearActiveSpeakerDebounceTimers() {
@@ -156,18 +159,6 @@ function scheduleParticipantActiveSpeakerOff(identity) {
         const changed = activeSpeakerIdentities.delete(identity);
         if (changed) updateParticipantList();
     }, ACTIVE_SPEAKER_DEBOUNCE_MS);
-}
-
-function normalizeGainValue(rawValue) {
-    const n = Number(rawValue);
-    if (!Number.isFinite(n)) return 1;
-    // Support both legacy 0~3 and current 0~300 slider formats.
-    const gain = n > 3 ? (n / 100) : n;
-    return Math.max(0, Math.min(gain, 3));
-}
-
-function gainToPercent(gain) {
-    return Math.round(Math.max(0, Math.min(gain, 3)) * 100);
 }
 
 function isScreenShareSource(source) {
@@ -222,195 +213,7 @@ async function toggleLocalScreenSubscription(identity) {
 // DOM加载完毕后恢复本地设置
 
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function startCaptureWithRetry(pid, maxAttempts = 8, intervalMs = 150) {
-    let lastError = null;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-            return await invoke('start_capture', { pid });
-        } catch (error) {
-            lastError = error;
-            const message = String(error?.message || error || '');
-            const isChannelNotReady = message.includes('channel closed');
-            if (!isChannelNotReady || attempt === maxAttempts) break;
-            await sleep(intervalMs);
-        }
-    }
-    throw lastError || new Error('start_capture 失败');
-}
-
-async function startCaptureMultiWithRetry(pids, maxAttempts = 8, intervalMs = 150) {
-    let lastError = null;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-            return await invoke('start_capture_multi', { pids });
-        } catch (error) {
-            lastError = error;
-            const message = String(error?.message || error || '');
-            const isChannelNotReady = message.includes('channel closed');
-            if (!isChannelNotReady || attempt === maxAttempts) break;
-            await sleep(intervalMs);
-        }
-    }
-    throw lastError || new Error('start_capture_multi 失败');
-}
-
-function updateAppAudioButtons() {
-    const btn = document.getElementById('btn-app-audio');
-    if (!btn) return;
-
-    const connected = !!(room && room.localParticipant);
-    // 只要连上房间，按钮就可以点击（开启或关闭）
-    btn.disabled = !connected;
-
-    if (isAppAudioSharing) {
-        // 分享中：变红、换成停止图标
-        btn.classList.add('active');
-        btn.innerHTML = '🛑';
-        btn.setAttribute('data-tooltip', '停止音频共享');
-    } else {
-        // 未分享：恢复默认音乐图标
-        btn.classList.remove('active');
-        btn.innerHTML = '🎵';
-        btn.setAttribute('data-tooltip', '共享应用音频');
-    }
-}
-
-function closeAppAudioModal(event) {
-    if (event && event.target && event.target.id !== 'app-audio-modal') return;
-    const modal = document.getElementById('app-audio-modal');
-    if (modal) modal.classList.add('hidden');
-    selectedAppAudioPids.clear();
-}
-
 // 🌟 智能路由：根据当前状态，决定是打开面板，还是停止共享
-function handleAppAudioClick() {
-    if (isAppAudioSharing) {
-        stopAppAudioShare();
-    } else {
-        openAppAudioModal();
-    }
-}
-
-async function openAppAudioModal() {
-    if (!room || !room.localParticipant) {
-        alert('请先进入语音分组后再共享应用音频。');
-        return;
-    }
-
-    const modal = document.getElementById('app-audio-modal');
-    const listEl = document.getElementById('app-audio-process-list');
-    if (!modal || !listEl) return;
-
-    modal.classList.remove('hidden');
-    listEl.innerHTML = '<div class="modal-empty">正在扫描活跃进程...</div>';
-
-    try {
-        const processes = await invoke('get_active_processes');
-        const rows = (Array.isArray(processes) ? processes : []).filter((p) => {
-            const name = (p?.name || '').trim();
-            return name.length > 0;
-        });
-
-        if (rows.length === 0) {
-            listEl.innerHTML = '<div class="modal-empty">未发现可用进程，请先启动目标应用后重试。</div>';
-            return;
-        }
-
-        listEl.innerHTML = rows.map((p) => {
-            const safeName = sanitizeText(p.name);
-            const pid = Number(p.pid) || 0;
-            const mem = Number(p.memory_mb) || 0;
-            return `
-                <button id="process-item-${pid}" class="process-item" onclick="toggleAppAudioProcessSelection(${pid})" title="选择 ${safeName}">
-                    <span class="process-name">${safeName}</span>
-                    <span class="process-meta">PID ${pid} · ${mem} MB</span>
-                </button>
-            `;
-        }).join('');
-    } catch (error) {
-        console.error('获取活跃进程失败:', error);
-        listEl.innerHTML = `<div class="modal-empty">获取进程列表失败：${sanitizeText(error?.message || String(error))}</div>`;
-    }
-}
-
-function toggleAppAudioProcessSelection(pid) {
-    if (!Number.isFinite(pid) || pid <= 0) return;
-    const item = document.getElementById(`process-item-${pid}`);
-    if (selectedAppAudioPids.has(pid)) {
-        selectedAppAudioPids.delete(pid);
-        if (item) item.classList.remove('selected');
-    } else {
-        selectedAppAudioPids.add(pid);
-        if (item) item.classList.add('selected');
-    }
-}
-
-async function confirmAppAudioSelection() {
-    const pids = Array.from(selectedAppAudioPids.values());
-    if (pids.length === 0) {
-        alert('请至少选择一个应用进程。');
-        return;
-    }
-
-    if (!room || !room.localParticipant) {
-        alert('房间未连接，无法共享应用音频。');
-        return;
-    }
-
-    const listEl = document.getElementById('app-audio-process-list');
-    if (listEl) {
-        listEl.innerHTML = '<div class="modal-empty">正在启动多应用音频截流并发布轨道，请稍候...</div>';
-    }
-
-    try {
-        if (localAppAudioPublication) {
-            try {
-                await room.localParticipant.unpublishTrack(localAppAudioPublication.track);
-            } catch (_) {}
-            localAppAudioPublication = null;
-        }
-
-        const realSampleRate = pids.length === 1
-            ? await startCaptureWithRetry(pids[0])
-            : await startCaptureMultiWithRetry(pids);
-
-        const track = await initLocalPcmPipeline(realSampleRate);
-        if (!track) throw new Error('未拿到 localPcmTrack');
-
-        await sleep(500);
-
-        localAppAudioPublication = await room.localParticipant.publishTrack(track, { name: 'app-audio' });
-        isAppAudioSharing = true;
-        updateAppAudioButtons();
-        closeAppAudioModal();
-    } catch (error) {
-        console.error('共享应用音频失败:', error);
-        alert(`共享应用音频失败：${error?.message || error}`);
-        isAppAudioSharing = false;
-        updateAppAudioButtons();
-    }
-}
-
-async function stopAppAudioShare() {
-    try {
-        if (room && room.localParticipant && localAppAudioPublication) {
-            await room.localParticipant.unpublishTrack(localAppAudioPublication.track);
-        }
-    } catch (error) {
-        console.warn('停止应用音频发布失败:', error);
-    } finally {
-        localAppAudioPublication = null;
-        isAppAudioSharing = false;
-        teardownLocalPcmPipeline();
-        closeAppAudioModal();
-        updateAppAudioButtons();
-    }
-}
-
 function normalizeServerInput(rawValue) {
     let val = (rawValue || '').trim();
     if (!val) return DEFAULT_SERVER_IP;
@@ -932,62 +735,6 @@ async function toggleRustMicShare() {
     }
 }
 
-function addRemoteGainNode(identity, source, track, audioEl) {
-    const volumes = ensureParticipantVolumeState(identity);
-    const gain = volumes[source] !== undefined ? volumes[source] : 1;
-    ensureAudioContext();
-    if (!remoteAudioContext) {
-        audioEl.volume = Math.max(0, Math.min(gain, 1));
-        return;
-    }
-
-    const mediaTrack = track && track.mediaStreamTrack;
-    if (!mediaTrack) return;
-
-    try {
-        const streamSource = remoteAudioContext.createMediaStreamSource(new MediaStream([mediaTrack]));
-        const gainNode = remoteAudioContext.createGain();
-        streamSource.connect(gainNode);
-        gainNode.connect(remoteAudioContext.destination);
-
-        audioEl.__gainAttached = true;
-        audioEl.__gainNode = gainNode;
-        audioEl.__streamSource = streamSource;
-        audioEl.__trackSid = track.sid;
-        gainNode.gain.value = gain;
-    } catch (e) {
-        audioEl.volume = Math.max(0, Math.min(gain, 1));
-        return;
-    }
-
-    const key = `${identity}:${source}`;
-    if (!remoteAudioGainNodes[key]) remoteAudioGainNodes[key] = [];
-    remoteAudioGainNodes[key].push(audioEl);
-}
-
-function clearRemoteGainNodes() {
-    Object.keys(remoteAudioGainNodes).forEach(key => {
-        remoteAudioGainNodes[key].forEach((audioEl) => {
-            try { audioEl.__streamSource && audioEl.__streamSource.disconnect(); } catch (_) {}
-            try { audioEl.__gainNode && audioEl.__gainNode.disconnect(); } catch (_) {}
-        });
-        delete remoteAudioGainNodes[key];
-    });
-}
-
-function removeRemoteAudioRouteByTrackSid(trackSid) {
-    if (!trackSid) return;
-    Object.keys(remoteAudioGainNodes).forEach((key) => {
-        remoteAudioGainNodes[key] = remoteAudioGainNodes[key].filter((audioEl) => {
-            if (audioEl.__trackSid !== trackSid) return true;
-            try { audioEl.__streamSource && audioEl.__streamSource.disconnect(); } catch (_) {}
-            try { audioEl.__gainNode && audioEl.__gainNode.disconnect(); } catch (_) {}
-            return false;
-        });
-        if (remoteAudioGainNodes[key].length === 0) delete remoteAudioGainNodes[key];
-    });
-}
-
 function renderChannelList() {
     const list = document.getElementById('channel-list');
     if (!list) return;
@@ -1006,15 +753,6 @@ function renderChannelList() {
             </div>
         `;
     }).join('');
-}
-
-function sanitizeText(value) {
-    return String(value || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
 }
 
 async function refreshRoomsFromServer() {
@@ -1139,29 +877,6 @@ function resetRoomUIAfterDisconnect() {
     closeAppAudioModal();
 }
 
-function setParticipantVolume(identity, source, volumeValue) {
-    ensureAudioContext();
-    const volumes = ensureParticipantVolumeState(identity);
-    if (!['mic', 'screen', 'appaudio'].includes(source)) return;
-
-    volumes[source] = normalizeGainValue(volumeValue);
-    saveUserVolumesToStorage();
-
-    const key = `${identity}:${source}`;
-    const gain = volumes[source];
-    const gains = remoteAudioGainNodes[key] || [];
-    gains.forEach((audioEl) => {
-        if (audioEl.__gainNode) audioEl.__gainNode.gain.value = gain;
-    });
-
-    // Fallback: if GainNode chain is unavailable, still allow native element volume control.
-    document.querySelectorAll('[data-audio-identity][data-audio-source]').forEach((audioEl) => {
-        if (audioEl.dataset.audioIdentity === String(identity) && audioEl.dataset.audioSource === source && !audioEl.__gainAttached) {
-            audioEl.volume = Math.max(0, Math.min(gain, 1));
-        }
-    });
-}
-
 function getMicCaptureOptions() {
     return {
         echoCancellation: true,
@@ -1249,169 +964,49 @@ function updateActiveSpeakerUI() {
 }
 
 async function updateMicList() {
-    const selectEl = document.getElementById('mic-select');
-    if (!selectEl) return;
-
-    try {
-        selectEl.disabled = false;
-        selectEl.innerHTML = '';
-
-        if (isTauriClient) {
-            const devices = await invoke('list_capture_devices');
-            const rows = Array.isArray(devices) ? devices : [];
-
-            if (rows.length === 0) {
-                const option = document.createElement('option');
-                option.value = '';
-                option.text = '未枚举到输入设备，使用系统默认麦克风';
-                selectEl.appendChild(option);
-            } else {
-                rows.forEach((device, index) => {
-                    const option = document.createElement('option');
-                    option.value = device.id || '';
-                    option.text = getCleanMicDeviceLabel(device, index);
-                    option.title = device.name || device.id || option.text;
-                    selectEl.appendChild(option);
-                });
-            }
-
-            const savedMic = localStorage.getItem('lk_rust_mic_device_id') || '';
-            const hasSaved = Array.from(selectEl.options).some(opt => opt.value === savedMic);
-            selectEl.value = hasSaved ? savedMic : '';
-
-            // 关键：开麦前先把选择同步给 Rust。否则 Rust 仍会录系统默认麦克风。
-            await invoke('set_rust_mic_device_id', { deviceId: selectEl.value }).catch((e) => {
-                console.warn('同步 Rust 麦克风设备失败:', e);
-            });
-            return;
-        }
-
-        const devices = await LivekitClient.Room.getLocalDevices('audioinput');
-        if (devices.length === 0) {
-            selectEl.innerHTML = '<option value="">未找到麦克风</option>';
-            return;
-        }
-
-        devices.forEach(device => {
-            const option = document.createElement('option');
-            option.value = device.deviceId;
-            option.text = device.label || `未知设备 (${device.deviceId.substring(0, 5)}...)`;
-            selectEl.appendChild(option);
-        });
-
-        const savedMic = localStorage.getItem('lk_mic');
-        if (savedMic && devices.some(d => d.deviceId === savedMic)) {
-            selectEl.value = savedMic;
-        }
-    } catch (e) {
-        console.error('获取麦克风列表失败:', e);
-        selectEl.innerHTML = '<option value="">麦克风列表获取失败</option>';
-    }
+    return updateMicListFromModule({
+        isTauriClient,
+        invoke,
+        LivekitClient,
+    });
 }
 
 async function switchMic(deviceId) {
-    if (isTauriClient) {
-        const normalized = deviceId || '';
-        localStorage.setItem('lk_rust_mic_device_id', normalized);
+    return switchMicFromModule(deviceId, {
+        isTauriClient,
+        invoke,
+        LivekitClient,
+        getRoom: () => room,
+        isMicActive: () => isMicOn,
+        isRustMicActive: () => isRustMicOn,
+        hasLocalRustMicPublication: () => !!localRustMicPublication,
+        stopRustMicShare,
+        startRustMicShare,
+        afterRustMicRestart: () => {
+            isMicOn = true;
+            isRustMicOn = true;
 
-        try {
-            await invoke('set_rust_mic_device_id', { deviceId: normalized });
+            const vadModule = document.getElementById('vad-module');
+            const monitorBtn = document.getElementById('btn-mic-monitor');
+            if (vadModule) vadModule.style.display = 'block';
+            if (monitorBtn) monitorBtn.style.display = 'flex';
 
-            // 如果当前已经开着 Rust 麦克风，切换设备必须重启采集线程和重新 publish。
-            if (room && room.localParticipant && (isMicOn || isRustMicOn || localRustMicPublication)) {
-                const vadModule = document.getElementById('vad-module');
-                const monitorBtn = document.getElementById('btn-mic-monitor');
-
-                await stopRustMicShare();
-                await startRustMicShare();
-
-                isMicOn = true;
-                isRustMicOn = true;
-                if (vadModule) vadModule.style.display = 'block';
-                if (monitorBtn) monitorBtn.style.display = 'flex';
-                updateMicSourceButton();
-            }
-        } catch (e) {
-            console.error('切换 Rust 麦克风失败:', e);
-            alert(`切换麦克风失败：${e.message || e}`);
-        }
-
-        return;
-    }
-
-    if (!room) return;
-    localStorage.setItem('lk_mic', deviceId);
-    try {
-        await room.switchActiveDevice('audioinput', deviceId);
-    } catch (e) {
-        console.error('切换麦克风失败:', e);
-        alert('切换失败，该设备可能被独占或拔出。');
-    }
+            updateMicSourceButton();
+        },
+    });
 }
 
 async function updateAudioOutputList() {
-    const selectEl = document.getElementById('audio-output-select');
-    if (!selectEl) return;
-    if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== 'function') {
-        selectEl.innerHTML = '<option value="default">当前浏览器不支持输出设备切换</option>';
-        return;
-    }
-
-    try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const outputs = devices.filter(d => d.kind === 'audiooutput');
-        selectEl.innerHTML = '';
-
-        const defaultOption = document.createElement('option');
-        defaultOption.value = 'default';
-        defaultOption.text = '默认扬声器';
-        selectEl.appendChild(defaultOption);
-
-        outputs.forEach((device) => {
-            const option = document.createElement('option');
-            option.value = device.deviceId;
-            option.text = device.label || `音频输出设备 (${device.deviceId.slice(0, 6)}...)`;
-            selectEl.appendChild(option);
-        });
-
-        const hasSaved = Array.from(selectEl.options).some(opt => opt.value === selectedAudioOutputId);
-        selectEl.value = hasSaved ? selectedAudioOutputId : 'default';
-    } catch (e) {
-        console.warn('枚举音频输出设备失败:', e);
-        selectEl.innerHTML = '<option value="default">输出设备不可用</option>';
-    }
+    return updateAudioOutputListFromModule({
+        selectedAudioOutputId,
+    });
 }
 
 async function switchAudioOutput(deviceId) {
-    selectedAudioOutputId = deviceId || 'default';
-    localStorage.setItem('lk_audio_output', selectedAudioOutputId);
-
-    if (remoteAudioContext && typeof remoteAudioContext.setSinkId === 'function') {
-        try {
-            await remoteAudioContext.setSinkId(selectedAudioOutputId);
-        } catch (e) {
-            console.warn('AudioContext.setSinkId 切换失败:', e);
-        }
-    }
-
-    if (localRustMicAudioContext && typeof localRustMicAudioContext.setSinkId === 'function') {
-        try {
-            await localRustMicAudioContext.setSinkId(selectedAudioOutputId);
-        } catch (e) {
-            console.warn('Rust麦克风耳返 setSinkId 切换失败:', e);
-        }
-    }
-
-    const audioEls = document.querySelectorAll('#audio-container audio');
-    for (const audioEl of audioEls) {
-        if (typeof audioEl.setSinkId === 'function') {
-            try {
-                await audioEl.setSinkId(selectedAudioOutputId);
-            } catch (e) {
-                console.warn('audio.setSinkId 切换失败:', e);
-            }
-        }
-    }
+    selectedAudioOutputId = await switchAudioOutputFromModule(deviceId, {
+        getRemoteAudioContext: () => remoteAudioContext,
+        getLocalRustMicAudioContext: () => localRustMicAudioContext,
+    });
 }
 
 async function joinRoom(options = {}) {
@@ -1873,290 +1468,6 @@ async function toggleMic() {
     await updateMicList();
 }
 
-function getShareAudioErrorMessage(err) {
-    const name = err?.name || 'UnknownError';
-    if (name === 'NotAllowedError') return '你取消了系统音频授权，或未勾选“分享系统音频”。';
-    if (name === 'NotReadableError') return '浏览器无法启动系统音频采集（常见于系统限制、驱动占用或浏览器能力限制）。';
-    if (name === 'AbortError') return '共享窗口被关闭或共享流程被中断。';
-    return `系统音频共享失败：${name}`;
-}
-
-function getSystemAudioPreflight() {
-    const issues = [];
-    const ua = navigator.userAgent || '';
-    const isWindows = /Windows/i.test(ua);
-    const isChromium = /Chrome|Edg/i.test(ua);
-    const hasGetDisplayMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
-
-    if (!hasGetDisplayMedia) issues.push('当前浏览器不支持屏幕共享 API（getDisplayMedia）。');
-    if (!window.isSecureContext) issues.push('当前页面不是安全上下文（建议使用 HTTPS 或 localhost）。');
-    if (!isWindows) issues.push('系统音频共享在非 Windows 平台上支持不稳定。');
-    if (!isChromium) issues.push('建议使用最新版 Chrome 或 Edge 进行系统音频共享。');
-
-    return { canTryAudio: hasGetDisplayMedia, issues };
-}
-
-function getDisplayMediaConstraints(withAudio = true) {
-    const video = { frameRate: { ideal: 60, max: 60 }, width: { ideal: 1920 }, height: { ideal: 1080 }, displaySurface: 'monitor' };
-    if (!withAudio) return { video, audio: false };
-    return {
-        video,
-        audio: {
-            echoCancellation: false, noiseSuppression: false, autoGainControl: false,
-            channelCount: 2, sampleRate: 48000, sampleSize: 16,
-            suppressLocalAudioPlayback: false, systemAudio: 'include'
-        }
-    };
-}
-
-function hasPublishedScreenAudioTrack() {
-    if (!room || !room.localParticipant) return false;
-    const pubs = Array.from(room.localParticipant.audioTrackPublications.values());
-    return pubs.some(pub => {
-        const source = pub?.source;
-        return source === LivekitClient.Track.Source.ScreenShareAudio || source === 'screen_share_audio';
-    });
-}
-
-function getLocalScreenPublication() {
-    if (!room || !room.localParticipant) return null;
-    const pubs = Array.from(room.localParticipant.videoTrackPublications.values());
-    return pubs.find(pub => {
-        const source = pub?.source;
-        return source === LivekitClient.Track.Source.ScreenShare || source === 'screen_share';
-    }) || null;
-}
-
-function showLocalScreenPreview(track) {
-    const previewBox = document.getElementById('local-screen-preview-box');
-    const previewVideo = document.getElementById('local-screen-preview');
-    if (!previewBox || !previewVideo || !track) return;
-
-    previewVideo.muted = true;
-
-    if (currentLocalScreenTrack && currentLocalScreenTrack !== track) {
-        currentLocalScreenTrack.detach(previewVideo);
-    }
-
-    track.attach(previewVideo);
-    currentLocalScreenTrack = track;
-    previewBox.style.display = 'block';
-}
-
-function hideLocalScreenPreview() {
-    const previewBox = document.getElementById('local-screen-preview-box');
-    const previewVideo = document.getElementById('local-screen-preview');
-    if (!previewBox || !previewVideo) return;
-
-    if (currentLocalScreenTrack) {
-        currentLocalScreenTrack.detach(previewVideo);
-        currentLocalScreenTrack = null;
-    }
-
-    previewVideo.srcObject = null;
-    previewBox.style.display = 'none';
-}
-
-function stopScreenBitrateMonitor() {
-    if (screenBitrateMonitorTimer) {
-        clearInterval(screenBitrateMonitorTimer);
-        screenBitrateMonitorTimer = null;
-    }
-    lastScreenOutboundStats = null;
-    currentScreenTargetBitrate = 0;
-}
-
-async function logCurrentScreenBitrate() {
-    const pub = getLocalScreenPublication();
-    const targetText = currentScreenTargetBitrate > 0
-        ? `${(currentScreenTargetBitrate / 1000000).toFixed(2)} Mbps`
-        : '未设置';
-
-    if (!pub || !pub.track) {
-        console.log(`[ScreenShare Stats] 目标码率=${targetText}，实际码率=暂无（未找到屏幕视频轨道）`);
-        return;
-    }
-
-    if (typeof pub.track.getRTCStatsReport !== 'function') {
-        console.log(`[ScreenShare Stats] 目标码率=${targetText}，实际码率=暂无（SDK未暴露RTC stats接口）`);
-        return;
-    }
-
-    try {
-        const report = await pub.track.getRTCStatsReport();
-        let outbound = null;
-
-        const pickOutbound = (stat) => {
-            if (!stat || stat.type !== 'outbound-rtp') return;
-            const kind = stat.kind || stat.mediaType;
-            if (kind !== 'video') return;
-            if (!outbound || (stat.bytesSent || 0) > (outbound.bytesSent || 0)) {
-                outbound = stat;
-            }
-        };
-
-        if (Array.isArray(report)) {
-            report.forEach(pickOutbound);
-        } else if (report && typeof report.forEach === 'function') {
-            report.forEach(pickOutbound);
-        }
-
-        if (!outbound) {
-            console.log(`[ScreenShare Stats] 目标码率=${targetText}，实际码率=暂无（未抓到outbound-rtp/video）`);
-            return;
-        }
-
-        const ts = outbound.timestamp instanceof Date ? outbound.timestamp.getTime() : Number(outbound.timestamp);
-        const bytes = Number(outbound.bytesSent || 0);
-        let actualBps = null;
-
-        if (lastScreenOutboundStats && ts > lastScreenOutboundStats.ts && bytes >= lastScreenOutboundStats.bytes) {
-            const deltaBytes = bytes - lastScreenOutboundStats.bytes;
-            const deltaMs = ts - lastScreenOutboundStats.ts;
-            if (deltaMs > 0) actualBps = (deltaBytes * 8 * 1000) / deltaMs;
-        }
-
-        lastScreenOutboundStats = { ts, bytes };
-
-        if (actualBps === null) {
-            console.log(`[ScreenShare Stats] 目标码率=${targetText}，实际码率=采集中...`);
-        } else {
-            console.log(`[ScreenShare Stats] 目标码率=${targetText}，实际码率=${(actualBps / 1000000).toFixed(2)} Mbps`);
-        }
-    } catch (err) {
-        console.warn('[ScreenShare Stats] 读取RTC stats失败:', err);
-    }
-}
-
-function startScreenBitrateMonitor(targetBitrate) {
-    stopScreenBitrateMonitor();
-    currentScreenTargetBitrate = targetBitrate;
-    console.log(`[ScreenShare Stats] 开始监控，目标码率=${(targetBitrate / 1000000).toFixed(2)} Mbps`);
-    logCurrentScreenBitrate();
-    screenBitrateMonitorTimer = setInterval(logCurrentScreenBitrate, 2000);
-}
-
-async function toggleScreen() {
-    if (!room) return;
-
-    try {
-        if (!isScreenOn) {
-            const resVal = document.getElementById('screen-res').value.split('x');
-            const customWidth = parseInt(resVal[0]);
-            const customHeight = parseInt(resVal[1]);
-            const customFps = parseInt(document.getElementById('screen-fps').value);
-            const customBitrate = parseInt(document.getElementById('screen-bitrate').value) * 1000;
-
-            const captureOptions = {
-                audio: true,
-                // 显式使用 getDisplayMedia 音频约束，禁用麦克风向的音频处理，避免系统音频发闷/忽大忽小
-                captureOptions: getDisplayMediaConstraints(true),
-                resolution: { width: customWidth, height: customHeight, frameRate: customFps }
-            };
-            
-            const publishOptions = {
-                screenShareEncoding: { maxBitrate: customBitrate, maxFramerate: customFps },
-                simulcast: false,
-                videoCodec: 'h264',
-                // 屏幕共享音频轨道优先使用高音质音乐预设
-                audioPreset: (LivekitClient.AudioPresets && (LivekitClient.AudioPresets.musicHighQuality || LivekitClient.AudioPresets.music)) || undefined
-            };
-
-            let audioShareFailed = false;
-            let audioShareError = null;
-            const preflight = getSystemAudioPreflight();
-            const shouldTryAudio = preflight.canTryAudio && window.isSecureContext;
-
-            try {
-                await room.localParticipant.setScreenShareEnabled(true, captureOptions, publishOptions);
-            } catch (err) {
-                console.error('抓取屏幕音视频流失败:', err);
-                audioShareFailed = true;
-                audioShareError = err;
-                
-                const fallbackCaptureOptions = {
-                    audio: false,
-                    captureOptions: getDisplayMediaConstraints(false),
-                    resolution: { width: customWidth, height: customHeight, frameRate: customFps }
-                };
-
-                await room.localParticipant.setScreenShareEnabled(true, fallbackCaptureOptions, publishOptions);
-            }
-
-            const tracks = Array.from(room.localParticipant.videoTrackPublications.values());
-            tracks.forEach(pub => {
-                if (pub.source === LivekitClient.Track.Source.ScreenShare && pub.track) {
-                    pub.track.mediaStreamTrack.contentHint = 'motion';
-                }
-            });
-
-            const localScreenPub = getLocalScreenPublication();
-            if (localScreenPub && localScreenPub.track) {
-                showLocalScreenPreview(localScreenPub.track);
-            }
-
-            isScreenOn = true;
-            const btn = document.getElementById('btn-screen');
-            btn.classList.add('active');
-            btn.innerHTML = '🛑';
-            btn.setAttribute('data-tooltip', '停止共享');
-            startScreenBitrateMonitor(customBitrate);
-            
-            document.getElementById('screen-res').disabled = true;
-            document.getElementById('screen-fps').disabled = true;
-            document.getElementById('screen-bitrate').disabled = true;
-
-            if (shouldTryAudio && !audioShareFailed && !hasPublishedScreenAudioTrack()) {
-                audioShareFailed = true;
-                audioShareError = { name: 'NotReadableError', message: 'Screen share started but no system-audio track was published' };
-            }
-
-            if (!shouldTryAudio && preflight.issues.length > 0) {
-                alert(
-                    '已开启屏幕共享（仅画面）。\n\n' +
-                    '当前环境不满足系统音频共享条件：\n- ' + preflight.issues.join('\n- ') +
-                    '\n\n推荐方案：\n' +
-                    '1. 用 HTTPS 打开此页面（不要用 http://内网IP）；\n' +
-                    '2. 使用最新版 Chrome/Edge；\n' +
-                    '3. 重新共享时选择“整个屏幕”并勾选“分享系统音频”。'
-                );
-            } else if (audioShareFailed) {
-                alert(
-                    '已开启屏幕共享（仅画面）。\n\n' +
-                    getShareAudioErrorMessage(audioShareError) +
-                    '\n\n如需共享系统声音，请确认：\n' +
-                    '1. 选择“整个屏幕”而不是“窗口”；\n' +
-                    '2. 勾选“分享系统音频”；\n' +
-                    '3. 关闭可能独占音频设备的软件后重试；\n' +
-                    '4. Windows 声音设置中关闭播放设备“独占模式”；\n' +
-                    '5. 尽量改为 HTTPS 访问页面（http://内网IP 常见失败）。'
-                );
-            }
-        } else {
-            await room.localParticipant.setScreenShareEnabled(false);
-            isScreenOn = false;
-            const btn = document.getElementById('btn-screen');
-            btn.classList.remove('active');
-            btn.innerHTML = '💻';
-            btn.setAttribute('data-tooltip', '共享屏幕');
-            stopScreenBitrateMonitor();
-            hideLocalScreenPreview();
-            
-            document.getElementById('screen-res').disabled = false;
-            document.getElementById('screen-fps').disabled = false;
-            document.getElementById('screen-bitrate').disabled = false;
-        }
-    } catch (e) {
-        console.error('屏幕共享未知错误', e);
-        isScreenOn = false;
-        stopScreenBitrateMonitor();
-        hideLocalScreenPreview();
-        document.getElementById('screen-res').disabled = false;
-        document.getElementById('screen-fps').disabled = false;
-        document.getElementById('screen-bitrate').disabled = false;
-    }
-}
-
 async function leaveRoom() {
     // 1. 优先优雅关闭 Rust 底层引擎，防止残留线程
     if (isTauriClient && isMicOn) {
@@ -2175,40 +1486,6 @@ async function leaveRoom() {
     setTimeout(() => {
         window.location.reload(); 
     }, 100);
-}
-
-async function sendChatMessage() {
-    if (!room || !room.localParticipant) return;
-    const input = document.getElementById('chat-input');
-    const text = input.value.trim();
-    if (!text) return;
-    
-    try {
-        const data = JSON.stringify({ msg: text });
-        await room.localParticipant.publishData(new TextEncoder().encode(data), { reliable: true });
-        
-        const myName = room.localParticipant.name || room.localParticipant.identity;
-        renderChatMessage(myName, text, true);
-        input.value = '';
-    } catch (e) {
-        console.error('发送消息失败:', e);
-    }
-}
-
-function renderChatMessage(sender, text, isSelf) {
-    const messagesDiv = document.getElementById('chat-messages');
-    const msgEl = document.createElement('div');
-    msgEl.className = 'chat-message' + (isSelf ? ' self' : '');
-    
-    const now = new Date();
-    const timeStr = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
-    
-    msgEl.innerHTML = `
-        <div class="chat-meta">${sender} ${timeStr}</div>
-        <div class="chat-content">${text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
-    `;
-    messagesDiv.appendChild(msgEl);
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
 /*
