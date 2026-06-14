@@ -1,5 +1,9 @@
 <script setup>
-defineEmits([
+import { computed } from 'vue';
+import BaseAvatar from '../common/BaseAvatar.vue';
+import { getSelfDisplayName, profileStore } from '../../stores/profileStore.js';
+
+const emit = defineEmits([
   'toggle-mic',
   'toggle-monitor',
   'toggle-screen',
@@ -7,26 +11,34 @@ defineEmits([
   'leave',
   'open-settings',
 ]);
+
+const displayName = computed(() => getSelfDisplayName('未连接大厅'));
 </script>
 
 <template>
   <!-- 左下角控制坞：保留按钮 id，供 rustMic/screenShare/appAudio 模块同步状态。 -->
-  <div id="user-control-panel" class="user-control-dock">
+  <div id="user-control-panel" class="user-control-dock modern-control-dock">
     <div class="user-profile">
-      <div class="avatar">🎮</div>
+      <BaseAvatar
+        :name="displayName"
+        :color="profileStore.avatarColor"
+        :preset="profileStore.avatarPreset"
+        size="md"
+        online
+      />
       <div class="info">
-        <div id="ui-username" class="name">未连接大厅</div>
+        <div id="ui-username" class="name">{{ displayName }}</div>
         <div id="ui-status" class="status">等待加入房间</div>
       </div>
-      <button class="user-settings-btn" title="音频设置" @click="$emit('open-settings')">⚙</button>
+      <button class="user-settings-btn" title="设置" @click="emit('open-settings')">⚙</button>
     </div>
 
     <div class="action-grid">
-      <button id="btn-mic" class="grid-btn" disabled data-tooltip="开启麦克风" @click="$emit('toggle-mic')">🎤</button>
-      <button id="btn-mic-monitor" class="grid-btn" style="display: none;" data-tooltip="监听耳返" @click="$emit('toggle-monitor')">🎧</button>
+      <button id="btn-mic" class="grid-btn" disabled data-tooltip="开启麦克风" @click="emit('toggle-mic')">🎤</button>
+      <button id="btn-mic-monitor" class="grid-btn" style="display: none;" data-tooltip="监听耳返" @click="emit('toggle-monitor')">🎧</button>
 
       <div class="screen-btn-wrapper">
-        <button id="btn-screen" class="grid-btn" disabled data-tooltip="共享屏幕" @click="$emit('toggle-screen')">💻</button>
+        <button id="btn-screen" class="grid-btn" disabled data-tooltip="共享屏幕" @click="emit('toggle-screen')">💻</button>
         <div class="screen-settings-popup">
           <div class="popup-title">共享画质设置</div>
           <select id="screen-res" disabled>
@@ -52,9 +64,9 @@ defineEmits([
         </div>
       </div>
 
-      <button id="btn-app-audio" class="grid-btn" disabled data-tooltip="共享应用音频" @click="$emit('app-audio-click')">🎵</button>
-      <button class="grid-btn" data-tooltip="音频设置" @click="$emit('open-settings')">⚙</button>
-      <button id="btn-leave" class="grid-btn danger-btn" style="display: none;" data-tooltip="断开连接" @click="$emit('leave')">🚪</button>
+      <button id="btn-app-audio" class="grid-btn" disabled data-tooltip="共享应用音频" @click="emit('app-audio-click')">🎵</button>
+      <button class="grid-btn" data-tooltip="设置中心" @click="emit('open-settings')">⚙</button>
+      <button id="btn-leave" class="grid-btn danger-btn" style="display: none;" data-tooltip="断开连接" @click="emit('leave')">🚪</button>
     </div>
   </div>
 </template>

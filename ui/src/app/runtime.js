@@ -306,6 +306,10 @@ function switchChannel(roomName) { return afterAction(roomConnectionFeature.swit
 function connectToChannel(targetRoomName, options) { return afterAction(roomConnectionFeature.connectToChannel(targetRoomName, options)); }
 function leaveRoom() { return afterAction(roomConnectionFeature.leaveRoom()); }
 
+
+/** 返回当前 LiveKit Room 对象，仅供 UI 统计面板读取本地 WebRTC stats。 */
+function getLiveKitRoom() { return room; }
+
 /** 刷新麦克风下拉框；Tauri 模式走 Rust 设备枚举，浏览器模式走 LiveKit 设备枚举。 */
 async function updateMicList() {
     return updateMicListFromModule({
@@ -428,11 +432,18 @@ function initLegacyDomBlock2() {
     }
 
     listen('mic_volume', (event) => {
-        const volumePercent = event.payload;
-        if (fillBar) {
-            fillBar.style.width = volumePercent + '%';
-            const threshold = parseFloat(slider?.value || '0');
-            fillBar.style.background = volumePercent < threshold ? '#4f545c' : '#23a559';
+        const volumePercent = Number(event.payload) || 0;
+
+        // 设置中心改成标签页后，VAD 相关 DOM 可能在初始化后被 Vue 重新挂载。
+        // 这里每次事件都重新查询一次元素，避免闭包里保存的是旧节点或空节点，
+        // 导致 Rust 仍在发送 mic_volume，但绿线不再跳动。
+        const liveFillBar = document.getElementById('vad-fill-bar') || fillBar;
+        const liveSlider = document.getElementById('vad-slider-input') || slider;
+
+        if (liveFillBar) {
+            liveFillBar.style.width = volumePercent + '%';
+            const threshold = parseFloat(liveSlider?.value || '0');
+            liveFillBar.style.background = volumePercent < threshold ? '#4f545c' : '#23a559';
         }
     });
 
@@ -475,12 +486,14 @@ Object.assign(window, {
     __appStore: appStore,
     __presenceClient: presenceClient,
     __syncAppStore: syncAppStore,
+    getLiveKitRoom,
 });
 
 export {
     appStore,
     syncAppStore,
     getRuntimeSnapshot,
+    getLiveKitRoom,
     joinRoom,
     createChannel,
     switchChannel,

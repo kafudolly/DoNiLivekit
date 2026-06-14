@@ -1977,3 +1977,1788 @@ button.primary-btn {
     border-color: #5865f2;
     box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.25);
 }
+
+/* ==========================================
+   Stage 20/21：现代化 UI 基础组件 + 用户资料
+   ========================================== */
+:root {
+    --doni-bg-0: #0f1014;
+    --doni-bg-1: #18191f;
+    --doni-bg-2: #22242b;
+    --doni-bg-3: #2b2e37;
+    --doni-border: rgba(255, 255, 255, 0.075);
+    --doni-border-strong: rgba(255, 255, 255, 0.13);
+    --doni-text-0: #f5f7fb;
+    --doni-text-1: #d7dce5;
+    --doni-text-2: #99a1ad;
+    --doni-accent: #5865f2;
+    --doni-success: #23a559;
+    --doni-danger: #f23f42;
+    --doni-radius-sm: 8px;
+    --doni-radius-md: 12px;
+    --doni-radius-lg: 18px;
+    --doni-shadow-soft: 0 16px 45px rgba(0, 0, 0, 0.28);
+}
+
+.base-avatar {
+    --avatar-size: 34px;
+    position: relative;
+    width: var(--avatar-size);
+    height: var(--avatar-size);
+    flex: 0 0 var(--avatar-size);
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffffff;
+    background:
+        radial-gradient(circle at 28% 22%, rgba(255,255,255,0.24), transparent 34%),
+        linear-gradient(135deg, var(--avatar-color), color-mix(in srgb, var(--avatar-color), #000 24%));
+    box-shadow:
+        inset 0 0 0 1px rgba(255,255,255,0.16),
+        0 10px 18px rgba(0,0,0,0.22);
+    user-select: none;
+}
+
+.base-avatar.size-sm { --avatar-size: 28px; }
+.base-avatar.size-md { --avatar-size: 38px; }
+.base-avatar.size-lg { --avatar-size: 48px; }
+.base-avatar.size-xl { --avatar-size: 64px; }
+
+.base-avatar-text {
+    font-size: calc(var(--avatar-size) * 0.38);
+    font-weight: 900;
+    line-height: 1;
+}
+
+.base-avatar.size-xl .base-avatar-text {
+    font-size: 28px;
+}
+
+.base-avatar-status {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: calc(var(--avatar-size) * 0.28);
+    height: calc(var(--avatar-size) * 0.28);
+    min-width: 9px;
+    min-height: 9px;
+    border-radius: 50%;
+    background: var(--doni-success);
+    border: 3px solid #2b2d31;
+    box-shadow: 0 0 0 3px rgba(35, 165, 89, 0.12);
+}
+
+.base-button {
+    border: 1px solid var(--doni-border);
+    border-radius: 10px;
+    background: #313338;
+    color: var(--doni-text-1);
+    font-weight: 800;
+    cursor: pointer;
+    transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+}
+.base-button.size-md { height: 38px; padding: 0 14px; }
+.base-button.size-sm { height: 30px; padding: 0 10px; font-size: 12px; }
+.base-button:hover:not(:disabled) {
+    transform: translateY(-1px);
+    background: #3a3d46;
+    border-color: var(--doni-border-strong);
+}
+.base-button.variant-primary {
+    background: linear-gradient(135deg, #5865f2, #7c3aed);
+    color: #ffffff;
+}
+
+/* 左侧频道栏整体更像成熟语音软件：卡片分区、清晰边界、弱化调试感。 */
+#sidebar {
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.015), transparent 22%),
+        #2b2d31;
+}
+
+.sidebar-title-block,
+.sidebar-brand,
+#sidebar > .sidebar-header {
+    border-bottom-color: rgba(255,255,255,0.06);
+}
+
+.input-group,
+.connection-card {
+    border: 1px solid rgba(255,255,255,0.055);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.16);
+}
+
+.voice-channel-card {
+    border-radius: 12px;
+    transition: background 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.voice-channel-card.active {
+    background: rgba(88, 101, 242, 0.10);
+    box-shadow: inset 0 0 0 1px rgba(88, 101, 242, 0.12);
+}
+
+.voice-channel-button {
+    height: 36px;
+    border-radius: 10px !important;
+    padding: 0 10px !important;
+}
+
+.voice-member-list,
+.channel-participants.voice-member-list {
+    padding: 4px 6px 10px 12px;
+    gap: 7px;
+}
+
+.voice-member-row {
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch;
+    min-height: 0;
+    padding: 8px;
+    border-radius: 12px;
+    background: rgba(17, 18, 20, 0.22);
+    border: 1px solid rgba(255,255,255,0.035);
+    color: var(--doni-text-1);
+}
+
+.voice-member-row:hover {
+    background: rgba(255, 255, 255, 0.055);
+    border-color: rgba(255,255,255,0.08);
+}
+
+.voice-member-row.self {
+    background:
+        linear-gradient(135deg, rgba(88, 101, 242, 0.22), rgba(124, 58, 237, 0.12));
+    border-color: rgba(88, 101, 242, 0.25);
+}
+
+.voice-member-mainline {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) 18px;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    min-width: 0;
+}
+
+.voice-member-identity {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.voice-member-name-line {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.voice-member-name {
+    display: block;
+    max-width: 100%;
+    color: var(--doni-text-0);
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.voice-member-meta {
+    color: var(--doni-text-2);
+    font-size: 10px;
+    line-height: 1;
+}
+
+.voice-member-mic {
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255,255,255,0.06);
+    font-size: 11px;
+    opacity: 0.86;
+}
+
+.self-tag {
+    flex-shrink: 0;
+    min-width: 18px;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(88, 101, 242, 0.28);
+    color: #c7d2fe;
+    font-size: 10px;
+    font-weight: 900;
+}
+
+.voice-member-volume-row {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 18px minmax(62px, 1fr) 60px 14px;
+    align-items: center;
+    gap: 7px;
+    margin-top: 8px;
+    padding-left: 37px;
+}
+
+.voice-member-volume-number {
+    height: 26px;
+    border-radius: 8px;
+    background: rgba(15, 16, 20, 0.78);
+    border-color: rgba(255,255,255,0.08);
+    color: var(--doni-text-0);
+}
+
+.voice-member-volume-slider {
+    height: 6px;
+    background: linear-gradient(90deg, #5865f2, #4f545c);
+}
+
+.voice-member-volume-slider::-webkit-slider-thumb {
+    border-color: #202228;
+}
+
+.voice-channel-empty {
+    margin-left: 30px;
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: rgba(17, 18, 20, 0.16);
+}
+
+/* 用户控制坞资料区现代化。 */
+.user-control-dock .user-profile {
+    align-items: center;
+}
+
+.user-control-dock .user-profile .info {
+    min-width: 0;
+}
+
+.user-control-dock .user-profile .name {
+    color: var(--doni-text-0);
+    font-size: 14px;
+}
+
+.user-control-dock .user-profile .status {
+    color: var(--doni-success);
+}
+
+.user-settings-btn {
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.06);
+}
+
+/* 设置中心：资料、设备和麦克风处理统一卡片化。 */
+.settings-card {
+    width: min(920px, 94vw);
+    max-height: 86vh;
+}
+
+.settings-header {
+    background:
+        radial-gradient(circle at 20% 0%, rgba(88,101,242,0.15), transparent 35%),
+        #2b2d31;
+}
+
+.modern-settings-body {
+    display: grid;
+    grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 1.1fr);
+    align-items: start;
+    gap: 12px;
+}
+
+.modern-settings-body .settings-section {
+    border: 1px solid rgba(255,255,255,0.065);
+    border-radius: 14px;
+    background: rgba(17, 18, 20, 0.24);
+    padding: 14px;
+}
+
+.profile-settings-panel {
+    grid-row: span 3;
+}
+
+.profile-preview-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px;
+    border-radius: 16px;
+    background:
+        radial-gradient(circle at 0% 0%, rgba(88,101,242,0.18), transparent 45%),
+        rgba(255,255,255,0.035);
+    border: 1px solid rgba(255,255,255,0.06);
+    margin-bottom: 14px;
+}
+
+.profile-preview-text {
+    min-width: 0;
+}
+
+.profile-preview-name {
+    color: var(--doni-text-0);
+    font-size: 17px;
+    font-weight: 900;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.profile-preview-subtitle {
+    margin-top: 4px;
+    color: var(--doni-text-2);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.profile-field {
+    margin-top: 10px;
+}
+
+.settings-text-input {
+    width: 100%;
+    height: 38px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: #1e1f22;
+    color: var(--doni-text-0);
+    padding: 0 12px;
+}
+
+.settings-text-input:focus {
+    border-color: #5865f2;
+    box-shadow: 0 0 0 3px rgba(88, 101, 242, 0.18);
+}
+
+.profile-choice-group {
+    margin-top: 14px;
+}
+
+.profile-choice-title {
+    margin-bottom: 8px;
+    color: var(--doni-text-2);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.avatar-preset-grid,
+.avatar-color-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.avatar-preset-btn {
+    min-width: 38px;
+    height: 34px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.055);
+    color: var(--doni-text-0);
+    cursor: pointer;
+    font-weight: 800;
+}
+
+.avatar-preset-btn.text-mode {
+    padding: 0 10px;
+    font-size: 12px;
+}
+
+.avatar-preset-btn.active,
+.avatar-color-btn.active {
+    outline: 2px solid rgba(88, 101, 242, 0.9);
+    outline-offset: 2px;
+}
+
+.avatar-color-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.18);
+    cursor: pointer;
+    box-shadow: 0 8px 18px rgba(0,0,0,0.24);
+}
+
+.profile-reset-btn {
+    margin-top: 14px;
+    width: 100%;
+    height: 34px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.045);
+    color: var(--doni-text-2);
+    cursor: pointer;
+    font-weight: 800;
+}
+
+.profile-reset-btn:hover {
+    color: var(--doni-text-0);
+    background: rgba(255,255,255,0.075);
+}
+
+@media (max-width: 980px) {
+    .modern-settings-body {
+        grid-template-columns: 1fr;
+    }
+
+    .profile-settings-panel {
+        grid-row: auto;
+    }
+}
+
+/* ==========================================
+   Stage 22：精确音量输入框去除数字微调按钮
+   ========================================== */
+.voice-member-volume-number,
+input[type="number"].voice-member-volume-number {
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+
+.voice-member-volume-number::-webkit-outer-spin-button,
+.voice-member-volume-number::-webkit-inner-spin-button,
+input[type="number"].voice-member-volume-number::-webkit-outer-spin-button,
+input[type="number"].voice-member-volume-number::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+}
+
+.voice-member-volume-number {
+    padding-right: 6px;
+    font-variant-numeric: tabular-nums;
+}
+
+.voice-member-volume-number:hover,
+.voice-member-volume-number:focus {
+    border-color: rgba(88, 101, 242, 0.9);
+    background: #15161a;
+}
+
+/* ==========================================
+   Stage 23 设置中心：标签页化与现代化
+   ========================================== */
+.settings-center-card {
+    width: min(980px, 94vw);
+    height: min(720px, 88vh);
+    max-height: 88vh;
+    border-radius: 18px;
+    background: #202225;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.settings-center-header {
+    min-height: 70px;
+    padding: 18px 20px;
+    background: linear-gradient(180deg, rgba(88, 101, 242, 0.12), rgba(32, 34, 37, 0));
+}
+
+.settings-center-layout {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 250px minmax(0, 1fr);
+    overflow: hidden;
+}
+
+.settings-nav {
+    padding: 16px 12px;
+    background: #18191c;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+}
+
+.settings-nav-item {
+    width: 100%;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background: transparent;
+    color: #b5bac1;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+}
+
+.settings-nav-item:hover {
+    background: rgba(255, 255, 255, 0.055);
+    color: #f2f3f5;
+    transform: translateX(2px);
+}
+
+.settings-nav-item.active {
+    background: rgba(88, 101, 242, 0.2);
+    border-color: rgba(88, 101, 242, 0.45);
+    color: #ffffff;
+    box-shadow: inset 3px 0 0 #5865f2;
+}
+
+.settings-nav-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #2b2d31;
+    flex-shrink: 0;
+    font-size: 16px;
+}
+
+.settings-nav-item.active .settings-nav-icon {
+    background: #5865f2;
+}
+
+.settings-nav-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.settings-nav-title {
+    font-size: 14px;
+    font-weight: 800;
+    color: inherit;
+}
+
+.settings-nav-desc {
+    font-size: 11px;
+    color: #80848e;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.settings-nav-item.active .settings-nav-desc {
+    color: #cfd3ff;
+}
+
+.settings-content-panel {
+    min-width: 0;
+    min-height: 0;
+    padding: 22px;
+    overflow-y: auto;
+}
+
+.settings-page-heading {
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-page-kicker {
+    font-size: 20px;
+    font-weight: 900;
+    color: #f2f3f5;
+}
+
+.settings-page-desc {
+    margin-top: 4px;
+    font-size: 13px;
+    color: #949ba4;
+}
+
+.settings-page-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.settings-page-section,
+.profile-settings-panel {
+    background: #25272c;
+    border: 1px solid rgba(255, 255, 255, 0.075);
+    border-radius: 16px;
+    padding: 18px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+}
+
+.settings-section-desc {
+    font-size: 13px;
+    color: #949ba4;
+    line-height: 1.6;
+    margin: 4px 0 14px;
+}
+
+.modern-settings-field {
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr);
+    align-items: center;
+    gap: 16px;
+    margin-top: 12px;
+}
+
+.modern-settings-field > span {
+    font-size: 13px;
+    color: #b5bac1;
+    font-weight: 700;
+}
+
+.modern-settings-field select,
+.modern-settings-field input,
+.settings-text-input {
+    min-height: 42px;
+    border-radius: 10px;
+    border: 1px solid #3b3d44;
+    background: #1e1f22;
+    color: #f2f3f5;
+    padding: 0 12px;
+}
+
+.settings-tip-card {
+    margin-top: 16px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(88, 101, 242, 0.1);
+    border: 1px solid rgba(88, 101, 242, 0.25);
+    color: #cfd3ff;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.settings-tip-card strong {
+    color: #ffffff;
+    flex-shrink: 0;
+}
+
+.settings-tip-card.warning {
+    background: rgba(250, 166, 26, 0.11);
+    border-color: rgba(250, 166, 26, 0.3);
+    color: #ffdca3;
+}
+
+.modern-vad-block {
+    margin-top: 14px;
+    border-radius: 14px;
+    background: #1e1f22;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.settings-range-note {
+    margin: 8px 0 14px;
+    color: #80848e;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.appearance-preview-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 16px;
+}
+
+.appearance-preview-card {
+    position: relative;
+    min-height: 150px;
+    border-radius: 16px;
+    padding: 12px;
+    background: #1e1f22;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: hidden;
+}
+
+.appearance-preview-card.active {
+    border-color: rgba(88, 101, 242, 0.75);
+    box-shadow: 0 0 0 1px rgba(88, 101, 242, 0.2), 0 12px 30px rgba(88, 101, 242, 0.12);
+}
+
+.appearance-preview-card.disabled-preview {
+    opacity: 0.62;
+}
+
+.appearance-preview-top {
+    height: 42px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #5865f2, #7c3aed);
+}
+
+.appearance-preview-top.soft {
+    background: linear-gradient(135deg, #dfe3ee, #aab3c8);
+}
+
+.appearance-preview-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 14px 0;
+}
+
+.appearance-preview-body span {
+    height: 10px;
+    width: 100%;
+    border-radius: 999px;
+    background: #3b3d44;
+}
+
+.appearance-preview-body span:nth-child(2) { width: 78%; }
+.appearance-preview-body span:nth-child(3) { width: 52%; }
+
+.appearance-preview-card strong {
+    font-size: 13px;
+    color: #f2f3f5;
+}
+
+.appearance-preview-card em {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    color: #80848e;
+    font-style: normal;
+    font-size: 11px;
+}
+
+.settings-about-section p {
+    color: #b5bac1;
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.about-info-list {
+    margin: 16px 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.about-info-list div {
+    padding: 12px;
+    border-radius: 12px;
+    background: #1e1f22;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.about-info-list span {
+    color: #80848e;
+    font-size: 11px;
+}
+
+.about-info-list strong {
+    color: #f2f3f5;
+    font-size: 13px;
+}
+
+@media (max-width: 860px) {
+    .settings-center-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .settings-nav {
+        flex-direction: row;
+        overflow-x: auto;
+        border-right: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .settings-nav-item {
+        min-width: 180px;
+    }
+
+    .modern-settings-field {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+}
+
+/* ==========================================================
+   Stage 22 正式版：语音频道成员列表现代化
+   ========================================================== */
+.stage22-voice-list.voice-channel-list {
+    gap: 8px;
+}
+
+.stage22-voice-list .voice-channel-card {
+    border-radius: 14px;
+    overflow: hidden;
+    background: transparent;
+    border: 1px solid transparent;
+    transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.stage22-voice-list .voice-channel-card.active {
+    background: rgba(88, 101, 242, 0.12);
+    border-color: rgba(88, 101, 242, 0.22);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+}
+
+.stage22-voice-list .voice-channel-button {
+    height: 38px;
+    padding: 0 10px;
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    border-radius: 12px;
+    font-weight: 700;
+}
+
+.stage22-voice-list .voice-channel-button .channel-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.stage22-voice-list .channel-count {
+    min-width: 22px;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.36);
+    color: #f2f3f5;
+    font-size: 11px;
+    line-height: 20px;
+    text-align: center;
+}
+
+.stage22-voice-list .voice-member-list {
+    padding: 2px 6px 8px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.stage22-voice-list .voice-member-row {
+    border-radius: 12px;
+    padding: 8px;
+    background: rgba(30, 31, 34, 0.42);
+    border: 1px solid rgba(255, 255, 255, 0.035);
+    transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+}
+
+.stage22-voice-list .voice-member-row:hover {
+    background: rgba(49, 51, 56, 0.96);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+.stage22-voice-list .voice-member-row.self {
+    background: linear-gradient(135deg, rgba(88, 101, 242, 0.18), rgba(88, 101, 242, 0.08));
+    border-color: rgba(88, 101, 242, 0.24);
+}
+
+.stage22-voice-list .voice-member-mainline {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) 22px;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+}
+
+.stage22-voice-list .voice-member-identity {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.stage22-voice-list .voice-member-name-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.stage22-voice-list .voice-member-name {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #f2f3f5;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.stage22-voice-list .self-tag {
+    flex: 0 0 auto;
+    height: 17px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: rgba(88, 101, 242, 0.28);
+    color: #dfe3ff;
+    font-size: 10px;
+    line-height: 17px;
+    font-weight: 800;
+}
+
+.stage22-voice-list .voice-member-meta {
+    color: #949ba4;
+    font-size: 10px;
+    line-height: 1.2;
+}
+
+.stage22-voice-list .voice-member-row.self .voice-member-meta {
+    color: #b8c1ff;
+}
+
+.stage22-voice-list .voice-member-mic {
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.045);
+    font-size: 12px;
+    opacity: 0.82;
+}
+
+.stage22-voice-list .voice-member-volume-row {
+    margin-top: 8px;
+    display: grid;
+    grid-template-columns: 18px minmax(64px, 1fr) 58px;
+    align-items: center;
+    gap: 8px;
+}
+
+.stage22-voice-list .voice-member-volume-icon {
+    color: #b5bac1;
+    font-size: 12px;
+    opacity: 0.9;
+}
+
+.stage22-voice-list .voice-member-volume-slider {
+    width: 100%;
+    min-width: 0;
+    height: 5px;
+    appearance: none;
+    -webkit-appearance: none;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #5865f2, #4752c4);
+    outline: none;
+    cursor: pointer;
+}
+
+.stage22-voice-list .voice-member-volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: #f2f3f5;
+    border: 2px solid #2b2d31;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+}
+
+.stage22-voice-list .voice-member-volume-input-wrap {
+    height: 26px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 13px;
+    align-items: center;
+    border-radius: 8px;
+    background: rgba(17, 18, 20, 0.76);
+    border: 1px solid rgba(255,255,255,0.06);
+    overflow: hidden;
+}
+
+.stage22-voice-list .voice-member-volume-number,
+.stage22-voice-list input[type="text"].voice-member-volume-number {
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    padding: 0 2px 0 7px;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: #f2f3f5;
+    font-size: 12px;
+    font-weight: 800;
+    text-align: right;
+    box-shadow: none;
+}
+
+.stage22-voice-list .voice-member-volume-number:focus {
+    box-shadow: none;
+}
+
+.stage22-voice-list .voice-member-volume-unit {
+    color: #949ba4;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.stage22-voice-list .voice-channel-empty {
+    padding: 8px 10px 10px;
+    color: #6d7480;
+    font-size: 12px;
+}
+
+@media (max-width: 1180px) {
+    .stage22-voice-list .voice-member-volume-row {
+        grid-template-columns: 18px minmax(52px, 1fr) 54px;
+        gap: 6px;
+    }
+}
+
+
+/* ============================================================
+   Stage 24/25：主舞台现代化 + 主题系统准备
+   说明：只改视觉层和轻量 store，不改 LiveKit / Rust / Presence 链路。
+   ============================================================ */
+:root {
+    --dc-bg-app: #1e1f22;
+    --dc-bg-sidebar: #2b2d31;
+    --dc-bg-main: #0b0c10;
+    --dc-bg-panel: rgba(35, 36, 42, 0.92);
+    --dc-bg-panel-solid: #232428;
+    --dc-bg-card: rgba(49, 51, 56, 0.78);
+    --dc-border-subtle: rgba(255, 255, 255, 0.07);
+    --dc-text-main: #f2f3f5;
+    --dc-text-normal: #dbdee1;
+    --dc-text-muted: #949ba4;
+    --dc-accent: #5865f2;
+    --dc-accent-soft: rgba(88, 101, 242, 0.18);
+    --dc-success: #23a559;
+    --dc-warning: #f0b232;
+    --dc-radius-sm: 8px;
+    --dc-radius-md: 14px;
+    --dc-radius-lg: 20px;
+    --dc-shadow-card: 0 18px 40px rgba(0, 0, 0, 0.34);
+    --dc-blur-panel: blur(0px);
+}
+
+:root.theme-midnight-purple {
+    --dc-bg-app: #15111f;
+    --dc-bg-sidebar: #211a30;
+    --dc-bg-main: #0d0915;
+    --dc-bg-panel: rgba(35, 25, 52, 0.9);
+    --dc-bg-panel-solid: #20172e;
+    --dc-bg-card: rgba(51, 38, 75, 0.78);
+    --dc-border-subtle: rgba(180, 140, 255, 0.12);
+    --dc-accent: #8b5cf6;
+    --dc-accent-soft: rgba(139, 92, 246, 0.18);
+}
+
+:root.theme-glass-dark {
+    --dc-bg-app: #111827;
+    --dc-bg-sidebar: rgba(24, 31, 42, 0.86);
+    --dc-bg-main: #061016;
+    --dc-bg-panel: rgba(22, 31, 42, 0.62);
+    --dc-bg-panel-solid: rgba(22, 31, 42, 0.78);
+    --dc-bg-card: rgba(47, 60, 76, 0.48);
+    --dc-border-subtle: rgba(255, 255, 255, 0.14);
+    --dc-accent: #22d3ee;
+    --dc-accent-soft: rgba(34, 211, 238, 0.16);
+    --dc-blur-panel: blur(14px);
+}
+
+:root.theme-soft-graphite {
+    --dc-bg-app: #222326;
+    --dc-bg-sidebar: #303136;
+    --dc-bg-main: #151619;
+    --dc-bg-panel: rgba(55, 56, 62, 0.9);
+    --dc-bg-panel-solid: #2b2c31;
+    --dc-bg-card: rgba(67, 68, 75, 0.72);
+    --dc-border-subtle: rgba(255, 255, 255, 0.09);
+    --dc-accent: #f59e0b;
+    --dc-accent-soft: rgba(245, 158, 11, 0.15);
+}
+
+body,
+.app-shell {
+    background: var(--dc-bg-app);
+}
+
+#sidebar.channel-sidebar,
+#chat-panel.chat-sidebar,
+#chat-panel {
+    background: var(--dc-bg-sidebar);
+}
+
+#main-area.modern-main-stage {
+    background:
+        radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--dc-accent) 22%, transparent), transparent 34%),
+        radial-gradient(circle at 80% 20%, rgba(255, 255, 255, 0.04), transparent 30%),
+        var(--dc-bg-main);
+}
+
+.modern-main-header {
+    background: color-mix(in srgb, var(--dc-bg-panel-solid) 90%, #000 10%) !important;
+    border-bottom-color: var(--dc-border-subtle) !important;
+}
+
+.modern-main-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.modern-main-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.main-header-pill.connected {
+    color: var(--dc-success);
+}
+
+.theme-pill {
+    border: 1px solid var(--dc-border-subtle);
+    background: var(--dc-accent-soft) !important;
+    color: var(--dc-text-normal) !important;
+}
+
+.modern-video-container {
+    position: relative;
+    z-index: 2;
+    background: transparent !important;
+}
+
+/* 有远端/本地屏幕画面时隐藏主控台，避免遮挡 LiveKit 动态挂载的视频。 */
+#video-container:not(:empty) + .stage-dashboard {
+    display: none;
+}
+
+.stage-dashboard {
+    position: absolute;
+    inset: 48px 0 0;
+    z-index: 1;
+    padding: 28px;
+    overflow-y: auto;
+    pointer-events: none;
+}
+
+.stage-dashboard > * {
+    pointer-events: auto;
+}
+
+.glass-panel {
+    background: var(--dc-bg-panel);
+    border: 1px solid var(--dc-border-subtle);
+    border-radius: var(--dc-radius-lg);
+    box-shadow: var(--dc-shadow-card);
+    backdrop-filter: var(--dc-blur-panel);
+}
+
+.stage-hero-card {
+    max-width: 1100px;
+    margin: 0 auto 18px;
+    padding: 22px;
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+    align-items: center;
+}
+
+.stage-kicker {
+    color: var(--dc-accent);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+
+.stage-hero-copy h2 {
+    color: var(--dc-text-main);
+    font-size: 28px;
+    line-height: 1.15;
+    margin-bottom: 8px;
+}
+
+.stage-hero-copy p {
+    color: var(--dc-text-muted);
+    font-size: 13px;
+}
+
+.stage-self-card {
+    min-width: 220px;
+    padding: 12px;
+    border-radius: 16px;
+    background: var(--dc-bg-card);
+    border: 1px solid var(--dc-border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.stage-self-card strong,
+.stage-member-copy strong,
+.stage-media-card strong,
+.quality-metric-card strong {
+    display: block;
+    color: var(--dc-text-main);
+}
+
+.stage-self-card span,
+.stage-member-copy span,
+.stage-media-card em,
+.quality-metric-card em,
+.stage-panel-header span {
+    color: var(--dc-text-muted);
+    font-size: 12px;
+    font-style: normal;
+}
+
+.stage-grid {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.8fr);
+    gap: 16px;
+}
+
+.stage-panel {
+    padding: 16px;
+}
+
+.stage-members-panel {
+    grid-row: span 2;
+}
+
+.stage-panel-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+    margin-bottom: 14px;
+}
+
+.stage-panel-header strong {
+    color: var(--dc-text-main);
+    font-size: 15px;
+}
+
+.stage-panel-header em {
+    border-radius: 999px;
+    padding: 3px 8px;
+    background: var(--dc-accent-soft);
+    color: var(--dc-text-normal);
+    font-size: 11px;
+    font-style: normal;
+    white-space: nowrap;
+}
+
+.stage-member-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 10px;
+}
+
+.stage-member-card {
+    min-width: 0;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-radius: 14px;
+    background: var(--dc-bg-card);
+    border: 1px solid transparent;
+    transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.stage-member-card:hover {
+    transform: translateY(-1px);
+    border-color: var(--dc-border-subtle);
+}
+
+.stage-member-card.self {
+    border-color: color-mix(in srgb, var(--dc-accent) 55%, transparent);
+    background: var(--dc-accent-soft);
+}
+
+.stage-member-copy {
+    min-width: 0;
+    flex: 1;
+}
+
+.stage-member-copy strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.stage-member-mic {
+    width: 28px;
+    height: 28px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.18);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.stage-empty-state.compact {
+    min-height: 140px;
+    border: 1px dashed var(--dc-border-subtle);
+    border-radius: 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: var(--dc-text-muted);
+    text-align: center;
+}
+
+.stage-media-grid,
+.quality-metrics-grid {
+    display: grid;
+    gap: 10px;
+}
+
+.stage-media-card,
+.quality-metric-card {
+    padding: 12px;
+    border-radius: 14px;
+    background: var(--dc-bg-card);
+    border: 1px solid var(--dc-border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.stage-media-card > span {
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.18);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.stage-media-card.active {
+    border-color: color-mix(in srgb, var(--dc-success) 45%, transparent);
+    background: color-mix(in srgb, var(--dc-success) 12%, var(--dc-bg-card));
+}
+
+.quality-metrics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.quality-metric-card {
+    display: block;
+}
+
+.quality-metric-card span {
+    display: block;
+    color: var(--dc-text-muted);
+    font-size: 11px;
+    margin-bottom: 6px;
+}
+
+.quality-sparkline {
+    margin-top: 14px;
+    height: 42px;
+    padding: 7px;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.16);
+    display: flex;
+    align-items: end;
+    gap: 6px;
+}
+
+.quality-sparkline span {
+    flex: 1;
+    border-radius: 999px 999px 2px 2px;
+    background: linear-gradient(to top, var(--dc-accent), color-mix(in srgb, var(--dc-accent) 40%, #fff));
+    opacity: 0.78;
+}
+
+.quality-sparkline span:nth-child(1) { height: 35%; }
+.quality-sparkline span:nth-child(2) { height: 52%; }
+.quality-sparkline span:nth-child(3) { height: 44%; }
+.quality-sparkline span:nth-child(4) { height: 68%; }
+.quality-sparkline span:nth-child(5) { height: 58%; }
+.quality-sparkline span:nth-child(6) { height: 76%; }
+.quality-sparkline span:nth-child(7) { height: 48%; }
+.quality-sparkline span:nth-child(8) { height: 62%; }
+
+/* 设置中心：主题选择卡片 */
+.theme-choice-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 12px;
+}
+
+.theme-choice-card {
+    border: 1px solid var(--dc-border-subtle);
+    border-radius: 16px;
+    background: var(--dc-bg-card);
+    color: var(--dc-text-normal);
+    padding: 12px;
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.theme-choice-card:hover,
+.theme-choice-card.active {
+    transform: translateY(-1px);
+    border-color: var(--dc-accent);
+    background: var(--dc-accent-soft);
+}
+
+.theme-choice-preview {
+    height: 72px;
+    border-radius: 12px;
+    padding: 10px;
+    background: #1e1f22;
+    display: grid;
+    grid-template-columns: 34px 1fr;
+    grid-template-rows: repeat(3, 1fr);
+    gap: 6px;
+    overflow: hidden;
+}
+
+.theme-choice-preview i {
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.theme-choice-preview i:first-child {
+    grid-row: 1 / 4;
+    border-radius: 12px;
+    background: currentColor;
+    opacity: 0.7;
+}
+
+.theme-choice-card strong {
+    color: var(--dc-text-main);
+}
+
+.theme-choice-card em {
+    color: var(--dc-text-muted);
+    font-size: 12px;
+    font-style: normal;
+}
+
+.theme-choice-midnight-purple .theme-choice-preview { background: #15111f; color: #8b5cf6; }
+.theme-choice-glass-dark .theme-choice-preview { background: linear-gradient(135deg, #07111a, #172554); color: #22d3ee; }
+.theme-choice-soft-graphite .theme-choice-preview { background: #2b2c31; color: #f59e0b; }
+.theme-choice-doni-dark .theme-choice-preview { background: #1e1f22; color: #5865f2; }
+
+@media (max-width: 1180px) {
+    .stage-dashboard {
+        padding: 18px;
+    }
+
+    .stage-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .stage-members-panel {
+        grid-row: auto;
+    }
+}
+
+@media (max-width: 760px) {
+    .stage-hero-card {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .quality-metrics-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ============================================================
+   Stage 26：频道成员列表主题修复 + 主舞台浮动状态面板 + 本地连接质量
+   说明：连接质量由客户端 getStats() 读取，不增加 FastAPI / LiveKit 服务端轮询压力。
+   ============================================================ */
+
+/* 语音频道成员列表修复：去掉靠右缩进，铺满频道卡片，并跟随主题变量。 */
+.stage22-voice-list .voice-channel-card {
+    width: 100%;
+    border-radius: 16px;
+    border: 1px solid transparent;
+    transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.stage22-voice-list .voice-channel-card.active {
+    background: color-mix(in srgb, var(--dc-accent) 9%, var(--dc-bg-panel-solid));
+    border-color: color-mix(in srgb, var(--dc-accent) 28%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dc-accent) 13%, transparent);
+}
+
+.stage22-voice-list .voice-channel-button {
+    width: 100%;
+}
+
+.stage22-voice-list .channel-count {
+    background: color-mix(in srgb, var(--dc-bg-main) 70%, transparent);
+    color: var(--dc-text-main);
+}
+
+.stage22-voice-list .voice-member-list,
+.stage22-voice-list .channel-participants.voice-member-list {
+    width: 100%;
+    padding: 4px 0 10px 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.stage22-voice-list .voice-member-row {
+    width: 100%;
+    border-radius: 14px;
+    padding: 9px;
+    background: color-mix(in srgb, var(--dc-bg-card) 82%, var(--dc-bg-main));
+    border: 1px solid var(--dc-border-subtle);
+    box-shadow: none;
+}
+
+.stage22-voice-list .voice-member-row:hover {
+    background: color-mix(in srgb, var(--dc-bg-card) 92%, var(--dc-accent) 6%);
+    border-color: color-mix(in srgb, var(--dc-accent) 24%, var(--dc-border-subtle));
+}
+
+.stage22-voice-list .voice-member-row.self {
+    background: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--dc-accent) 18%, var(--dc-bg-card)),
+        color-mix(in srgb, var(--dc-accent) 8%, var(--dc-bg-card))
+    );
+    border-color: color-mix(in srgb, var(--dc-accent) 35%, var(--dc-border-subtle));
+}
+
+.stage22-voice-list .voice-member-name {
+    color: var(--dc-text-main);
+}
+
+.stage22-voice-list .voice-member-meta {
+    color: var(--dc-text-muted);
+}
+
+.stage22-voice-list .voice-member-row.self .voice-member-meta {
+    color: color-mix(in srgb, var(--dc-accent) 34%, var(--dc-text-muted));
+}
+
+.stage22-voice-list .self-tag {
+    background: color-mix(in srgb, var(--dc-accent) 24%, transparent);
+    color: color-mix(in srgb, var(--dc-accent) 22%, #ffffff);
+}
+
+.stage22-voice-list .voice-member-volume-slider {
+    background: linear-gradient(90deg, var(--dc-accent), color-mix(in srgb, var(--dc-accent) 72%, #111214));
+}
+
+.stage22-voice-list .voice-member-volume-input-wrap {
+    background: color-mix(in srgb, var(--dc-bg-main) 86%, transparent);
+    border-color: var(--dc-border-subtle);
+}
+
+.stage22-voice-list .voice-member-volume-number,
+.stage22-voice-list input[type="text"].voice-member-volume-number {
+    color: var(--dc-text-main);
+}
+
+/* 主舞台：覆盖 Stage 24 的“有视频就完全隐藏主控台”规则。 */
+#video-container:not(:empty) + .stage-dashboard.stage-dashboard-overlay {
+    display: block;
+}
+
+#video-container:not(:empty) + .stage-dashboard.stage-dashboard-overlay.collapsed {
+    display: none !important;
+}
+
+#video-container:not(:empty) + .stage-dashboard.stage-dashboard-overlay.visible {
+    display: block !important;
+}
+
+.stage-dashboard-overlay {
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.stage-dashboard-overlay.collapsed {
+    display: none;
+}
+
+.stage-dashboard-overlay.media-active {
+    inset: 60px 18px auto auto;
+    width: min(460px, calc(100% - 36px));
+    max-height: calc(100vh - 92px);
+    padding: 0;
+    overflow-y: auto;
+    z-index: 24;
+    pointer-events: auto;
+}
+
+.stage-dashboard-overlay.media-active .stage-hero-card {
+    display: none;
+}
+
+.stage-dashboard-overlay.media-active .stage-grid {
+    width: 100%;
+    max-width: none;
+    grid-template-columns: 1fr;
+    gap: 12px;
+}
+
+.stage-dashboard-overlay.media-active .stage-panel {
+    border-radius: 16px;
+}
+
+.stage-dashboard-overlay.media-active .stage-member-grid {
+    grid-template-columns: 1fr;
+}
+
+.stage-dashboard-overlay.media-active .stage-media-grid,
+.stage-dashboard-overlay.media-active .quality-metrics-grid {
+    grid-template-columns: 1fr;
+}
+
+.stage-status-toggle {
+    position: absolute;
+    top: 60px;
+    right: 18px;
+    z-index: 28;
+    height: 36px;
+    min-width: 132px;
+    padding: 0 12px;
+    border: 1px solid var(--dc-border-subtle);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--dc-bg-panel) 88%, transparent);
+    color: var(--dc-text-normal);
+    backdrop-filter: var(--dc-blur-panel);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: pointer;
+    transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.stage-status-toggle:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--dc-accent) 40%, var(--dc-border-subtle));
+    background: color-mix(in srgb, var(--dc-bg-panel) 76%, var(--dc-accent) 10%);
+}
+
+.stage-status-toggle.open {
+    background: color-mix(in srgb, var(--dc-bg-panel) 82%, var(--dc-accent) 12%);
+}
+
+.stage-status-toggle span {
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.stage-status-toggle strong {
+    min-width: 44px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--dc-accent) 20%, transparent);
+    color: var(--dc-text-main);
+    font-size: 11px;
+    text-align: center;
+}
+
+.quality-pill.good,
+.quality-metric-card.good strong,
+.quality-metric-card.good em {
+    color: var(--dc-success) !important;
+}
+
+.quality-pill.ok,
+.quality-metric-card.ok strong,
+.quality-metric-card.ok em {
+    color: var(--dc-warning) !important;
+}
+
+.quality-pill.bad,
+.quality-metric-card.bad strong,
+.quality-metric-card.bad em {
+    color: #f23f42 !important;
+}
+
+.quality-pill.offline,
+.quality-pill.unknown {
+    color: var(--dc-text-muted) !important;
+}
+
+.quality-metric-card.good {
+    border-color: color-mix(in srgb, var(--dc-success) 25%, var(--dc-border-subtle));
+}
+
+.quality-metric-card.ok {
+    border-color: color-mix(in srgb, var(--dc-warning) 32%, var(--dc-border-subtle));
+}
+
+.quality-metric-card.bad {
+    border-color: color-mix(in srgb, #f23f42 35%, var(--dc-border-subtle));
+}
+
+.quality-sparkline span {
+    min-height: 8%;
+    transition: height 0.25s ease, background 0.18s ease;
+    background: linear-gradient(to top, var(--dc-accent), color-mix(in srgb, var(--dc-accent) 35%, #ffffff));
+}
+
+/* 主题变量继续下沉到更多旧组件，让 Stage 26 的频道栏也能跟随主题变色。 */
+.login-card,
+.sidebar-foldout,
+#user-control-panel.user-control-dock,
+#user-control-panel,
+.settings-center-card,
+.modal-card,
+.user-item,
+.process-item,
+.chat-content {
+    border-color: var(--dc-border-subtle);
+}
+
+.login-card,
+.sidebar-foldout,
+#user-control-panel.user-control-dock,
+#user-control-panel {
+    background: var(--dc-bg-panel-solid);
+}
+
+.channel-item.active,
+.voice-channel-button.active {
+    background: color-mix(in srgb, var(--dc-accent) 14%, var(--dc-bg-card));
+    color: var(--dc-text-main);
+}
+
+.grid-btn:hover:not(:disabled),
+.user-settings-btn:hover,
+.server-header-btn:hover {
+    background: color-mix(in srgb, var(--dc-accent) 16%, var(--dc-bg-card));
+}
+
+@media (max-width: 1180px) {
+    .stage-dashboard-overlay.media-active {
+        left: 18px;
+        width: auto;
+    }
+}

@@ -1,6 +1,17 @@
 import { formatError, logError } from '../shared/errors.js';
 
-/** 统一采样率兜底，避免 AudioContext 收到非法 sampleRate。 */
+/**
+ * Audio pipeline module.
+ *
+ * 这个模块只负责“PCM WebSocket -> AudioWorklet -> MediaStreamTrack”的底层管线：
+ * - 9001：应用音频共享管线，给 appAudio.js 发布 app-audio track 使用；
+ * - 9002：Rust 麦克风管线，给 client.js 的 startRustMicShare() 发布 microphone track 使用；
+ * - Rust 麦克风耳返监听开关。
+ *
+ * 这里刻意不处理 LiveKit 房间连接、不处理 publishTrack、不处理切频道。
+ * 这样可以把高风险音频底层状态从 legacy/client.js 拆出去，同时保持 LiveKit 发布逻辑不变。
+ */
+
 function resolveSampleRate(sampleRate, fallback = 48000) {
     const targetSampleRate = Number(sampleRate);
     return Number.isFinite(targetSampleRate) && targetSampleRate >= 8000
@@ -8,7 +19,6 @@ function resolveSampleRate(sampleRate, fallback = 48000) {
         : fallback;
 }
 
-/** 安全关闭 WebSocket：先解绑回调，再关闭连接，避免 teardown 后误触发旧回调。 */
 function closeSocket(socket) {
     if (!socket) return;
 
@@ -26,7 +36,6 @@ function closeSocket(socket) {
     }
 }
 
-/** 等待 9001/9002 WebSocket 建连；超时或关闭时给出明确端口提示。 */
 async function waitForWebSocketOpen(socket, wsUrl, label) {
     await new Promise((resolve, reject) => {
         let settled = false;
@@ -61,8 +70,15 @@ async function waitForWebSocketOpen(socket, wsUrl, label) {
     });
 }
 
-/** 把 Rust 推来的 Float32 PCM 数据转发给 AudioWorklet 环形缓冲。 */
 function bindPcmSocketToWorklet(socket, workletNode, label) {
+    if (workletNode?.port) {
+        workletNode.port.onmessage = (event) => {
+            if (event.data?.type === 'pcm_buffer_stats' && event.data.dropped > 0) {
+                console.warn(`[audioPipelines/${label}] 已丢弃过期 PCM 样本，避免旧语音堆积`, event.data);
+            }
+        };
+    }
+
     socket.onmessage = async (event) => {
         if (!workletNode) return;
         if (event.data instanceof ArrayBuffer) {
@@ -84,7 +100,6 @@ function bindPcmSocketToWorklet(socket, workletNode, label) {
     };
 }
 
-/** 创建底层音频管线模块；只返回 MediaStreamTrack，不负责 LiveKit publish。 */
 export function createAudioPipelinesFeature() {
     // 9001 应用音频共享管线状态。
     let localPcmAudioContext = null;
@@ -120,7 +135,11 @@ export function createAudioPipelinesFeature() {
         }
     }
 
-    /** 初始化 9002 Rust 麦克风管线：WebSocket -> AudioWorklet -> microphone track。 */
+    /**
+     * 初始化 Rust 麦克风 9002 管线。
+     * Rust 端通过 ws://127.0.0.1:9002 推送 Float32 PCM，
+     * 前端 AudioWorklet 把它转成 MediaStreamTrack，再由 client.js 发布给 LiveKit。
+     */
     async function initRustMicPipeline(sampleRate, wsUrl = 'ws://127.0.0.1:9002') {
         const resolvedSampleRate = resolveSampleRate(sampleRate);
 
@@ -147,7 +166,9 @@ export function createAudioPipelinesFeature() {
                 numberOfOutputs: 1,
                 outputChannelCount: [1],
                 processorOptions: {
-                    capacityFrames: resolvedSampleRate * 0.2 // Rust 麦克风使用 200ms 缓冲，优先低延迟。
+                    capacityFrames: resolvedSampleRate * 0.2, // Rust 麦克风最多保留 200ms。
+                    targetLatencyFrames: resolvedSampleRate * 0.04, // 延迟堆积时回落到约 40ms。
+                    maxLatencyFrames: resolvedSampleRate * 0.12 // 超过约 120ms 直接丢弃旧语音。
                 }
             });
 
@@ -199,7 +220,6 @@ export function createAudioPipelinesFeature() {
         }
     }
 
-    /** 释放 9002 麦克风管线，按 WebSocket、Track、GainNode、Worklet、AudioContext 顺序清理。 */
     function teardownRustMicPipeline() {
         closeSocket(localRustMicSocket);
         localRustMicSocket = null;
@@ -229,7 +249,11 @@ export function createAudioPipelinesFeature() {
         isRustMicPipelineReady = false;
     }
 
-    /** 初始化 9001 应用音频管线：WebSocket -> AudioWorklet -> app-audio track。 */
+    /**
+     * 初始化应用音频 9001 管线。
+     * Rust 端根据用户选择的进程推送 Float32 PCM，
+     * appAudio.js 再把这里返回的 MediaStreamTrack 发布成 app-audio。
+     */
     async function initLocalPcmPipeline(sampleRate, wsUrl = 'ws://127.0.0.1:9001') {
         const resolvedSampleRate = resolveSampleRate(sampleRate);
 
@@ -256,7 +280,9 @@ export function createAudioPipelinesFeature() {
                 numberOfOutputs: 1,
                 outputChannelCount: [1],
                 processorOptions: {
-                    capacityFrames: resolvedSampleRate * 0.4 // 应用音频使用 400ms 缓冲，优先抗抖动。
+                    capacityFrames: resolvedSampleRate * 0.35, // 应用音频保留少量抗抖动空间。
+                    targetLatencyFrames: resolvedSampleRate * 0.08, // 延迟堆积时回落到约 80ms。
+                    maxLatencyFrames: resolvedSampleRate * 0.22 // 超过约 220ms 直接丢弃旧音频。
                 }
             });
 
@@ -301,7 +327,6 @@ export function createAudioPipelinesFeature() {
         }
     }
 
-    /** 释放 9001 应用音频管线，防止切换进程或停止共享后残留资源。 */
     function teardownLocalPcmPipeline() {
         closeSocket(localPcmSocket);
         localPcmSocket = null;
@@ -326,7 +351,6 @@ export function createAudioPipelinesFeature() {
         isLocalPcmPipelineReady = false;
     }
 
-    /** 切换 Rust 麦克风耳返，只改 GainNode 音量，不重建 9002 管线。 */
     function toggleMicMonitor() {
         isMicMonitorOn = !isMicMonitorOn;
         const btn = document.getElementById('btn-mic-monitor');

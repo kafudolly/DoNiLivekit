@@ -1,7 +1,13 @@
 <script setup>
 import { computed, reactive } from 'vue';
+import BaseAvatar from '../common/BaseAvatar.vue';
 import { appStore } from '../../stores/appStore.js';
 import { presenceStore } from '../../stores/presenceStore.js';
+import {
+  getSelfDisplayName,
+  getStableAvatarColor,
+  profileStore,
+} from '../../stores/profileStore.js';
 import {
   setParticipantVolume,
   getParticipantVolumePercent,
@@ -9,12 +15,6 @@ import {
 
 const emit = defineEmits(['switch-channel']);
 
-/**
- * Discord 风格语音频道列表。
- *
- * 频道与频道成员只从 presenceStore 读取。
- * 成员音量控制直接调用 runtime 的远端音频 GainNode 控制逻辑。
- */
 const fallbackChannels = [
   { id: 'day0', name: 'day0', type: 'voice', members: [] },
   { id: 'day1', name: 'day1', type: 'voice', members: [] },
@@ -27,9 +27,9 @@ const channels = computed(() => {
 
 const currentChannel = computed(() => appStore.connection.currentChannel || '');
 const selfIdentity = computed(() => presenceStore.identity || '');
-const selfDisplayName = computed(() => presenceStore.displayName || appStore.connection.username || '');
+const selfDisplayName = computed(() => getSelfDisplayName(presenceStore.displayName || appStore.connection.username || ''));
 
-// 保存当前输入框显示值。实际音量仍由 runtime/userVolumes/localStorage 管理。
+// 只缓存输入框正在编辑的值；真实音量仍由 runtime/userVolumes/localStorage 管理。
 const volumeInputs = reactive({});
 
 function getChannelId(channel) {
@@ -44,6 +44,15 @@ function getMembers(channel) {
   return Array.isArray(channel?.members) ? channel.members : [];
 }
 
+function getSortedMembers(channel) {
+  return [...getMembers(channel)].sort((a, b) => {
+    const aSelf = isSelf(a) ? 0 : 1;
+    const bSelf = isSelf(b) ? 0 : 1;
+    if (aSelf !== bSelf) return aSelf - bSelf;
+    return getMemberName(a).localeCompare(getMemberName(b), 'zh-Hans-CN');
+  });
+}
+
 function getMemberIdentity(member) {
   if (!member) return '';
   if (typeof member === 'string') return member;
@@ -51,27 +60,37 @@ function getMemberIdentity(member) {
 }
 
 function getMemberKey(member, index) {
-  return getMemberIdentity(member) || `member-${index}`;
+  return getMemberIdentity(member) || `${getMemberName(member)}-${index}`;
 }
 
-function getMemberName(member) {
+function getRawMemberName(member) {
   if (!member) return '';
   if (typeof member === 'string') return member;
   return String(member.displayName || member.name || member.identity || '').trim();
 }
 
-function getMemberInitial(member) {
-  const name = getMemberName(member);
-  return name ? name.slice(0, 1).toUpperCase() : '?';
-}
-
 function isSelf(member) {
   const identity = getMemberIdentity(member);
-  const displayName = getMemberName(member);
+  const displayName = getRawMemberName(member);
   return Boolean(
     (selfIdentity.value && identity === selfIdentity.value) ||
+    (presenceStore.displayName && displayName === presenceStore.displayName) ||
     (selfDisplayName.value && displayName === selfDisplayName.value)
   );
+}
+
+function getMemberName(member) {
+  if (isSelf(member)) return selfDisplayName.value;
+  return getRawMemberName(member) || '未命名用户';
+}
+
+function getMemberAvatarColor(member) {
+  if (isSelf(member)) return profileStore.avatarColor;
+  return getStableAvatarColor(getMemberIdentity(member) || getMemberName(member));
+}
+
+function getMemberAvatarPreset(member) {
+  return isSelf(member) ? profileStore.avatarPreset : '';
 }
 
 function getVolumeCacheKey(member) {
@@ -87,7 +106,7 @@ function resolveSavedVolumePercent(member) {
     ? getParticipantVolumePercent(displayName, 'mic')
     : identityPercent;
 
-  // 新连接时 identity 可能变化；如果 displayName 有保存值，则优先用 displayName 恢复。
+  // 对方重连后 identity 可能变化；如果 displayName 有保存值，优先恢复 displayName 的音量。
   if (displayNamePercent !== 100) return displayNamePercent;
   return identityPercent;
 }
@@ -101,7 +120,8 @@ function getVolumeInputValue(member) {
 }
 
 function clampVolumePercent(value) {
-  const n = Number(value);
+  const normalized = String(value ?? '').replace(/[％%]/g, '').trim();
+  const n = Number(normalized);
   if (!Number.isFinite(n)) return null;
   return Math.max(0, Math.min(Math.round(n), 300));
 }
@@ -121,7 +141,7 @@ function applyMicVolume(member, value, { commit = true } = {}) {
   const percent = clampVolumePercent(value);
   if (percent === null) return;
 
-  volumeInputs[cacheKey] = commit ? String(percent) : String(value);
+  volumeInputs[cacheKey] = commit ? String(percent) : String(value).replace(/[％%]/g, '').trim();
 
   // 真实播放链路按 LiveKit identity 调整。
   setParticipantVolume(identity, 'mic', percent);
@@ -148,7 +168,7 @@ function handleSwitchChannel(channel) {
 </script>
 
 <template>
-  <div id="channel-list" class="voice-channel-list">
+  <div id="channel-list" class="voice-channel-list stage22-voice-list">
     <div
       v-for="channel in channels"
       :key="getChannelId(channel)"
@@ -172,18 +192,29 @@ function handleSwitchChannel(channel) {
       >
         <template v-if="getMembers(channel).length > 0">
           <div
-            v-for="(member, index) in getMembers(channel)"
+            v-for="(member, index) in getSortedMembers(channel)"
             :key="getMemberKey(member, index)"
             class="voice-member-row"
             :class="{ self: isSelf(member) }"
           >
             <div class="voice-member-mainline">
-              <span class="voice-member-avatar">{{ getMemberInitial(member) }}</span>
-              <span class="voice-member-name">
-                {{ getMemberName(member) }}<span v-if="isSelf(member)" class="self-tag">我</span>
-              </span>
-              <span class="voice-member-mic">🎙</span>
-              <span class="voice-member-status" title="在线"></span>
+              <BaseAvatar
+                :name="getMemberName(member)"
+                :color="getMemberAvatarColor(member)"
+                :preset="getMemberAvatarPreset(member)"
+                size="sm"
+                online
+              />
+
+              <div class="voice-member-identity">
+                <div class="voice-member-name-line">
+                  <span class="voice-member-name" :title="getMemberName(member)">{{ getMemberName(member) }}</span>
+                  <span v-if="isSelf(member)" class="self-tag">我</span>
+                </div>
+                <div class="voice-member-meta">{{ isSelf(member) ? '本机语音' : '语音成员' }}</div>
+              </div>
+
+              <span class="voice-member-mic" title="麦克风在线">🎙</span>
             </div>
 
             <div v-if="!isSelf(member)" class="voice-member-volume-row">
@@ -197,18 +228,20 @@ function handleSwitchChannel(channel) {
                 :value="getVolumeInputValue(member)"
                 @input="handleMicVolumeInput(member, $event.target.value)"
               >
-              <input
-                class="voice-member-volume-number"
-                type="number"
-                min="0"
-                max="300"
-                step="1"
-                :value="getVolumeInputValue(member)"
-                @input="handleMicVolumeInput(member, $event.target.value)"
-                @change="commitMicVolume(member, $event.target.value)"
-                @blur="commitMicVolume(member, $event.target.value)"
-              >
-              <span class="voice-member-volume-unit">%</span>
+              <div class="voice-member-volume-input-wrap">
+                <input
+                  class="voice-member-volume-number"
+                  type="text"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  :value="getVolumeInputValue(member)"
+                  @input="handleMicVolumeInput(member, $event.target.value)"
+                  @change="commitMicVolume(member, $event.target.value)"
+                  @blur="commitMicVolume(member, $event.target.value)"
+                  @keydown.enter.prevent="commitMicVolume(member, $event.target.value)"
+                >
+                <span class="voice-member-volume-unit">%</span>
+              </div>
             </div>
           </div>
         </template>
