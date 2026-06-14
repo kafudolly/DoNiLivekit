@@ -557,3 +557,580 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     opacity: 0.5;
     cursor: not-allowed;
 }
+/* ============================================================
+   Stage 12：Discord 风格布局骨架
+   目标：只调整布局和视觉层级，不改变 LiveKit / Rust / Presence 业务链路。
+   ============================================================ */
+
+html,
+body,
+#app {
+    width: 100%;
+    height: 100%;
+}
+
+#app {
+    display: block;
+    overflow: hidden;
+}
+
+body {
+    background: #1e1f22;
+}
+
+.app-shell {
+    width: 100vw;
+    height: 100vh;
+    display: grid;
+    grid-template-columns: 72px 300px minmax(0, 1fr) 320px;
+    grid-template-rows: 100%;
+    overflow: hidden;
+    background: #1e1f22;
+    color: #dbdee1;
+}
+
+/* 左侧服务器栏：为后续多服务器/设置入口预留，不承载业务状态。 */
+.server-rail {
+    grid-column: 1;
+    background: #1e1f22;
+    border-right: 1px solid #111214;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+}
+
+.server-pill {
+    width: 48px;
+    height: 48px;
+    border: none;
+    border-radius: 16px;
+    background: #313338;
+    color: #dbdee1;
+    font-size: 18px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: border-radius 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.server-pill:hover,
+.server-pill.active {
+    border-radius: 14px;
+    background: #5865f2;
+    color: #fff;
+}
+
+.server-pill.muted {
+    background: #2b2d31;
+    color: #23a559;
+}
+
+.server-pill.muted:hover {
+    background: #23a559;
+    color: #fff;
+}
+
+.server-rail-spacer {
+    flex: 1;
+}
+
+/* 频道侧栏：只负责大厅、频道列表、折叠设置和左下角控制坞。 */
+#sidebar.channel-sidebar {
+    grid-column: 2;
+    width: 300px;
+    min-width: 300px;
+    height: 100vh;
+    padding: 0;
+    overflow: hidden;
+    background: #2b2d31;
+    border-right: 1px solid #1a1b1e;
+    display: flex;
+    flex-direction: column;
+}
+
+.sidebar-server-header {
+    height: 56px;
+    padding: 0 14px;
+    border-bottom: 1px solid #1f2024;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+}
+
+.server-title-block {
+    min-width: 0;
+}
+
+.server-name {
+    color: #f2f3f5;
+    font-size: 15px;
+    font-weight: 800;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.server-subtitle {
+    margin-top: 2px;
+    color: #949ba4;
+    font-size: 11px;
+}
+
+.server-header-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: #b5bac1;
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.server-header-btn:hover {
+    background: #35373c;
+    color: #fff;
+}
+
+.sidebar-scroll-area {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 10px;
+}
+
+.sidebar-scroll-area::-webkit-scrollbar,
+#channel-list::-webkit-scrollbar,
+#participant-list::-webkit-scrollbar,
+#chat-messages::-webkit-scrollbar,
+#video-container::-webkit-scrollbar {
+    width: 6px;
+}
+
+.sidebar-scroll-area::-webkit-scrollbar-thumb,
+#channel-list::-webkit-scrollbar-thumb,
+#participant-list::-webkit-scrollbar-thumb,
+#chat-messages::-webkit-scrollbar-thumb,
+#video-container::-webkit-scrollbar-thumb {
+    background: #1e1f22;
+    border-radius: 999px;
+}
+
+.login-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 12px;
+    background: #232428;
+}
+
+.section-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #949ba4;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.login-card input,
+#chat-input,
+.device-selectors select,
+.screen-settings-popup select {
+    background: #1e1f22;
+    border: 1px solid #303238;
+}
+
+.login-card input {
+    padding: 10px;
+    font-size: 13px;
+}
+
+button.primary-btn {
+    padding: 10px 12px;
+    border-radius: 8px;
+}
+
+.voice-channel-section {
+    margin-bottom: 10px;
+}
+
+.channel-section-title {
+    padding: 0 4px;
+}
+
+.sidebar-title {
+    margin: 0;
+    color: #949ba4;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+.tiny-btn {
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    color: #b5bac1;
+}
+
+.tiny-btn:hover {
+    background: #3b3d44;
+    color: #fff;
+}
+
+#channel-list.discord-channel-list,
+#channel-list {
+    max-height: none;
+    min-height: 0;
+    overflow-y: visible;
+    gap: 4px;
+    margin-bottom: 0;
+}
+
+.channel-row {
+    gap: 2px;
+    margin-bottom: 4px;
+}
+
+.channel-item {
+    width: 100%;
+    height: 34px;
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+    border-radius: 8px;
+    background: transparent;
+    color: #949ba4;
+    font-size: 14px;
+    font-weight: 650;
+}
+
+.channel-item:hover {
+    background: #35373c;
+    color: #dbdee1;
+}
+
+.channel-item.active {
+    background: #404249;
+    color: #fff;
+}
+
+.channel-icon {
+    opacity: 0.85;
+    font-size: 14px;
+}
+
+.channel-name {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.channel-member-count {
+    min-width: 20px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: #232428;
+    color: #949ba4;
+    font-size: 11px;
+    text-align: center;
+}
+
+.channel-item.active .channel-member-count {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+}
+
+.channel-participants {
+    padding: 0 0 2px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: #b5bac1;
+}
+
+.voice-member-item {
+    width: 100%;
+    height: 28px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: #b5bac1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+    text-align: left;
+    cursor: default;
+}
+
+.voice-member-item:hover {
+    background: #313338;
+    color: #dbdee1;
+}
+
+.voice-member-avatar {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: #5865f2;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.voice-member-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+}
+
+.voice-channel-empty {
+    padding: 4px 8px;
+    color: #6d737d;
+    font-size: 12px;
+}
+
+.sidebar-foldout {
+    margin-top: 12px;
+    border-radius: 10px;
+    background: #232428;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    overflow: hidden;
+}
+
+.sidebar-foldout summary {
+    list-style: none;
+    min-height: 38px;
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: #dbdee1;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.sidebar-foldout summary::-webkit-details-marker {
+    display: none;
+}
+
+.sidebar-foldout summary::after {
+    content: '⌄';
+    color: #949ba4;
+    transition: transform 0.18s ease;
+}
+
+.sidebar-foldout[open] summary::after {
+    transform: rotate(180deg);
+}
+
+.summary-count,
+.summary-hint {
+    margin-left: auto;
+    color: #949ba4;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+#participant-list {
+    flex: none;
+    max-height: 220px;
+    min-height: 86px;
+    padding: 8px;
+    gap: 8px;
+}
+
+.user-item {
+    background: #2b2d31;
+    border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.audio-foldout .vad-container {
+    margin: 0 8px 8px;
+    padding: 12px;
+}
+
+/* 左下角用户控制区固定在频道栏底部。 */
+#user-control-panel.user-control-dock,
+#user-control-panel {
+    margin-top: 0;
+    border-radius: 0;
+    padding: 10px;
+    border-top: 1px solid #1f2024;
+    background: #232428;
+    flex-shrink: 0;
+}
+
+.user-profile {
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+}
+
+.device-selectors {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding-bottom: 10px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.device-selectors select {
+    width: 100%;
+    color: #dbdee1;
+    padding: 7px 8px;
+    border-radius: 7px;
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+}
+
+.action-grid {
+    gap: 8px;
+}
+
+.grid-btn {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+}
+
+/* 主舞台区域。 */
+#main-area.main-stage,
+#main-area {
+    grid-column: 3;
+    min-width: 0;
+    min-height: 0;
+    background: #111214;
+}
+
+#header.main-header,
+#header {
+    height: 48px;
+    background: #313338;
+    border-bottom: 1px solid #1e1f22;
+    padding: 0 18px;
+    color: #f2f3f5;
+}
+
+#video-container.stage-video-container,
+#video-container {
+    background:
+        radial-gradient(circle at 50% 20%, rgba(88, 101, 242, 0.11), transparent 34%),
+        #050506;
+    padding: 18px;
+}
+
+#video-container:empty::before {
+    content: '当前没有屏幕共享或视频画面';
+    color: #6d737d;
+    font-size: 13px;
+    border: 1px dashed #2f3136;
+    border-radius: 14px;
+    padding: 18px 24px;
+    align-self: center;
+    margin-top: 18vh;
+}
+
+/* 右侧聊天栏。 */
+#chat-panel.chat-sidebar,
+#chat-panel {
+    grid-column: 4;
+    width: 320px;
+    background: #2b2d31;
+}
+
+.chat-header {
+    justify-content: space-between;
+}
+
+.chat-header-badge {
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #1e1f22;
+    color: #949ba4;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+}
+
+.chat-empty-hint {
+    font-size: 12px;
+    color: #80848e;
+    text-align: center;
+    margin-top: 10px;
+}
+
+.chat-input-area {
+    padding: 12px;
+}
+
+#btn-send {
+    border-radius: 8px;
+}
+
+.screen-setting-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+/* 中等窗口下收窄右侧聊天，避免主舞台被挤压。 */
+@media (max-width: 1280px) {
+    .app-shell {
+        grid-template-columns: 64px 280px minmax(0, 1fr) 300px;
+    }
+
+    #sidebar.channel-sidebar {
+        width: 280px;
+        min-width: 280px;
+    }
+
+    #chat-panel.chat-sidebar,
+    #chat-panel {
+        width: 300px;
+    }
+}
+
+/* 小窗口下暂时隐藏服务器栏，保留主要功能区。 */
+@media (max-width: 1050px) {
+    .app-shell {
+        grid-template-columns: 280px minmax(0, 1fr) 300px;
+    }
+
+    .server-rail {
+        display: none;
+    }
+
+    #sidebar.channel-sidebar {
+        grid-column: 1;
+    }
+
+    #main-area.main-stage,
+    #main-area {
+        grid-column: 2;
+    }
+
+    #chat-panel.chat-sidebar,
+    #chat-panel {
+        grid-column: 3;
+    }
+}

@@ -6,7 +6,7 @@ import { presenceStore } from '../../stores/presenceStore.js';
 const emit = defineEmits(['switch-channel']);
 
 /**
- * 频道列表 Vue 渲染层。
+ * 语音频道列表。
  *
  * 频道和成员只从 presenceStore 读取。
  * 点击频道时只向上抛出 switch-channel，由 runtime/roomConnection 负责连接 LiveKit。
@@ -46,6 +46,11 @@ function getMemberName(member) {
   return String(member.displayName || member.name || member.identity || '').trim();
 }
 
+function getMemberInitial(member) {
+  const name = getMemberName(member);
+  return name ? name.slice(0, 1).toUpperCase() : '?';
+}
+
 function handleSwitchChannel(channel) {
   const channelName = getChannelName(channel);
   if (!channelName) return;
@@ -54,7 +59,7 @@ function handleSwitchChannel(channel) {
 </script>
 
 <template>
-  <div id="channel-list">
+  <div id="channel-list" class="discord-channel-list">
     <div
       v-for="channel in channels"
       :key="getChannelId(channel)"
@@ -66,7 +71,9 @@ function handleSwitchChannel(channel) {
         :class="{ active: currentChannel === getChannelName(channel) }"
         @click="handleSwitchChannel(channel)"
       >
-        # {{ getChannelName(channel) }}
+        <span class="channel-icon">🔊</span>
+        <span class="channel-name">{{ getChannelName(channel) }}</span>
+        <span class="channel-member-count">{{ getMembers(channel).length }}</span>
       </button>
 
       <div
@@ -74,16 +81,19 @@ function handleSwitchChannel(channel) {
         :class="{ empty: getMembers(channel).length === 0 }"
       >
         <template v-if="getMembers(channel).length > 0">
-          <span
+          <button
             v-for="(member, index) in getMembers(channel)"
             :key="getMemberKey(member, index)"
-            class="channel-member-name"
+            type="button"
+            class="voice-member-item"
+            title="语音频道成员"
           >
-            {{ getMemberName(member) }}<span v-if="index < getMembers(channel).length - 1">、</span>
-          </span>
+            <span class="voice-member-avatar">{{ getMemberInitial(member) }}</span>
+            <span class="voice-member-name">{{ getMemberName(member) }}</span>
+          </button>
         </template>
         <template v-else>
-          暂无在线成员
+          <div class="voice-channel-empty">暂无成员</div>
         </template>
       </div>
     </div>

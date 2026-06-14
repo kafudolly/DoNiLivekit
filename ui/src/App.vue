@@ -30,25 +30,34 @@ onMounted(async () => {
 </script>
 
 <template>
-  <SidebarPanel
-    @join-room="joinRoom"
-    @create-channel="createChannel"
-    @switch-channel="switchChannel"
-    @switch-mic="switchMic"
-    @switch-output="switchAudioOutput"
-    @toggle-mic="toggleMic"
-    @toggle-monitor="toggleMicMonitor"
-    @toggle-screen="toggleScreen"
-    @app-audio-click="handleAppAudioClick"
-    @leave="leaveRoom"
-  />
+  <div class="app-shell">
+    <aside class="server-rail" aria-label="服务器栏">
+      <button class="server-pill active" title="DoNiChannel">豆</button>
+      <button class="server-pill muted" title="添加服务器">+</button>
+      <div class="server-rail-spacer"></div>
+      <button class="server-pill muted" title="设置">⚙</button>
+    </aside>
 
-  <MainStage />
+    <SidebarPanel
+      @join-room="joinRoom"
+      @create-channel="createChannel"
+      @switch-channel="switchChannel"
+      @switch-mic="switchMic"
+      @switch-output="switchAudioOutput"
+      @toggle-mic="toggleMic"
+      @toggle-monitor="toggleMicMonitor"
+      @toggle-screen="toggleScreen"
+      @app-audio-click="handleAppAudioClick"
+      @leave="leaveRoom"
+    />
 
-  <AppAudioModal
-    @close="closeAppAudioModal"
-    @confirm="confirmAppAudioSelection"
-  />
+    <MainStage />
 
-  <ChatPanel @send="sendChatMessage" />
+    <ChatPanel @send="sendChatMessage" />
+
+    <AppAudioModal
+      @close="closeAppAudioModal"
+      @confirm="confirmAppAudioSelection"
+    />
+  </div>
 </template>

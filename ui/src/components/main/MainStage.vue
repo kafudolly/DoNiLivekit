@@ -1,8 +1,8 @@
 <template>
   <!-- 主舞台：LiveKit 远端媒体由 livekitEvents.js 挂载到 #video-container/#audio-container。 -->
-  <main id="main-area">
-    <div id="header"># 🎮 直播与共享大厅</div>
-    <div id="video-container"></div>
+  <main id="main-area" class="main-stage">
+    <div id="header" class="main-header"># 🎮 直播与共享大厅</div>
+    <div id="video-container" class="stage-video-container"></div>
     <div id="audio-container"></div>
 
     <div id="local-screen-preview-box">
