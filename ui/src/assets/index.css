@@ -1134,3 +1134,846 @@ button.primary-btn {
         grid-column: 3;
     }
 }
+
+/* ==========================================
+   Stage 14：音频设置面板与控制坞整理
+   ========================================== */
+
+/* 频道栏只负责连接、频道和当前频道音量；设备/VAD 已移入设置面板。 */
+.audio-foldout,
+.device-selectors {
+    display: none !important;
+}
+
+.sidebar-server-header .server-header-btn {
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: #b5bac1;
+    cursor: pointer;
+    font-size: 15px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar-server-header .server-header-btn:hover {
+    color: #f2f3f5;
+    background: #3b3d44;
+}
+
+.user-profile {
+    align-items: center;
+}
+
+.user-profile .info {
+    flex: 1;
+    min-width: 0;
+}
+
+.user-settings-btn {
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 8px;
+    background: #313338;
+    color: #b5bac1;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.user-settings-btn:hover {
+    background: #404249;
+    color: #ffffff;
+    transform: translateY(-1px);
+}
+
+/* 设置弹窗：始终挂载 DOM，但 hidden 时完全不可见。 */
+.audio-settings-modal.hidden {
+    display: none;
+}
+
+.audio-settings-modal {
+    z-index: 260;
+    backdrop-filter: blur(6px);
+}
+
+.settings-card {
+    width: min(760px, 92vw);
+    max-height: 84vh;
+}
+
+.settings-header {
+    align-items: flex-start;
+}
+
+.settings-subtitle {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #949ba4;
+    font-weight: 500;
+}
+
+.settings-body {
+    padding: 14px;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+}
+
+.settings-section {
+    border: 1px solid #3b3d44;
+    border-radius: 12px;
+    background: #232428;
+    padding: 14px;
+}
+
+.settings-section-title {
+    color: #f2f3f5;
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 12px;
+}
+
+.settings-field {
+    display: grid;
+    grid-template-columns: 120px minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    color: #b5bac1;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.settings-field:last-child {
+    margin-bottom: 0;
+}
+
+.settings-field select,
+.settings-section select {
+    width: 100%;
+    background-color: #1e1f22;
+    color: #dbdee1;
+    border: 1px solid #3b3d44;
+    padding: 10px 12px;
+    border-radius: 8px;
+    outline: none;
+    font-size: 13px;
+}
+
+.settings-field select:focus,
+.settings-section select:focus {
+    border-color: #5865f2;
+    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.2);
+}
+
+.settings-vad-block,
+#vad-module.settings-vad-block {
+    display: block !important;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+
+.settings-vad-block .vad-header {
+    margin-bottom: 12px;
+}
+
+.vad-boost-header {
+    margin-top: 22px;
+}
+
+.settings-note p {
+    color: #b5bac1;
+    font-size: 12px;
+    line-height: 1.7;
+    margin-bottom: 4px;
+}
+
+.settings-note p:last-child {
+    margin-bottom: 0;
+}
+
+/* 控制坞图标更紧凑，给新增设置按钮留空间。 */
+.user-control-dock .action-grid {
+    gap: 8px;
+}
+
+.user-control-dock .grid-btn {
+    width: 38px;
+    height: 38px;
+}
+
+/* 当前频道音量列表在 Discord 样式下更像设置区块。 */
+.members-foldout #participant-list {
+    min-height: 96px;
+    max-height: 210px;
+}
+
+@media (max-width: 900px) {
+    .settings-field {
+        grid-template-columns: 1fr;
+        gap: 6px;
+    }
+
+    .settings-card {
+        width: min(640px, 94vw);
+    }
+}
+
+
+/* ==========================================
+   Stage 15：单服务器布局与界面细化
+   ========================================== */
+
+/* 项目当前只需要一个局域网语音大厅，因此移除最左侧服务器栏后的三栏布局。 */
+.app-shell.single-server-shell,
+.app-shell {
+    grid-template-columns: 320px minmax(0, 1fr) 330px;
+}
+
+.server-rail {
+    display: none !important;
+}
+
+#sidebar.channel-sidebar {
+    grid-column: 1;
+    width: 320px;
+    min-width: 320px;
+    box-shadow: 8px 0 24px rgba(0, 0, 0, 0.16);
+}
+
+#main-area.main-stage,
+#main-area {
+    grid-column: 2;
+}
+
+#chat-panel.chat-sidebar,
+#chat-panel {
+    grid-column: 3;
+    width: 330px;
+}
+
+/* 去掉服务器栏后，频道栏本身承担品牌入口，顶部更像 Discord 服务器标题。 */
+.sidebar-server-header {
+    height: 60px;
+    padding: 0 16px;
+    background: #2b2d31;
+}
+
+.server-name {
+    font-size: 16px;
+    letter-spacing: 0.1px;
+}
+
+.server-subtitle {
+    color: #8e959e;
+}
+
+/* 连接卡片更紧凑，减少顶部空间占用。 */
+.login-card {
+    margin: 14px 12px 16px;
+    padding: 12px;
+}
+
+.login-card input {
+    height: 38px;
+    padding: 9px 11px;
+}
+
+.login-card .primary-btn,
+#btn-connect.primary-btn {
+    height: 40px;
+    padding: 0 12px;
+}
+
+/* 频道区在无服务器栏布局下作为主导航，提升可读性。 */
+.voice-channel-section {
+    padding: 0 10px;
+}
+
+.channel-section-title {
+    padding: 0 4px;
+}
+
+.channel-item {
+    min-height: 34px;
+}
+
+.voice-member-row,
+.channel-member-name {
+    user-select: none;
+}
+
+/* 当前频道音量区域更像一个可折叠控制面板。 */
+.members-foldout {
+    margin: 14px 12px 0;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.members-foldout summary {
+    min-height: 40px;
+}
+
+.members-foldout #participant-list {
+    max-height: 260px;
+}
+
+/* 控制坞贴底并稍微增加层级，形成完整左栏闭环。 */
+#user-control-panel.user-control-dock,
+#user-control-panel {
+    margin: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.12);
+}
+
+/* 主舞台和聊天栏在三栏布局下更协调。 */
+#header.main-header,
+#header {
+    height: 52px;
+}
+
+#video-container.stage-video-container,
+#video-container {
+    background: radial-gradient(circle at center, #08090b 0%, #000000 70%);
+}
+
+#chat-panel.chat-sidebar,
+#chat-panel {
+    background: #2b2d31;
+}
+
+.chat-header {
+    height: 52px;
+}
+
+.chat-input-area {
+    padding: 12px;
+}
+
+/* 中等窗口：优先保住主舞台，轻微收窄两侧。 */
+@media (max-width: 1280px) {
+    .app-shell.single-server-shell,
+    .app-shell {
+        grid-template-columns: 300px minmax(0, 1fr) 310px;
+    }
+
+    #sidebar.channel-sidebar {
+        width: 300px;
+        min-width: 300px;
+    }
+
+    #chat-panel.chat-sidebar,
+    #chat-panel {
+        width: 310px;
+    }
+}
+
+/* 小窗口：继续保持三栏，但压缩左/右栏宽度。 */
+@media (max-width: 1050px) {
+    .app-shell.single-server-shell,
+    .app-shell {
+        grid-template-columns: 280px minmax(0, 1fr) 280px;
+    }
+
+    #sidebar.channel-sidebar {
+        grid-column: 1;
+        width: 280px;
+        min-width: 280px;
+    }
+
+    #main-area.main-stage,
+    #main-area {
+        grid-column: 2;
+    }
+
+    #chat-panel.chat-sidebar,
+    #chat-panel {
+        grid-column: 3;
+        width: 280px;
+    }
+}
+
+
+/* ==========================================
+   Stage 16：主舞台、频道成员、聊天栏视觉优化
+   ========================================== */
+
+/* 频道列表：从普通按钮列表升级为 Discord 风格语音频道卡片。 */
+.voice-channel-list {
+    gap: 8px;
+    padding-right: 2px;
+}
+
+.voice-channel-card {
+    border-radius: 10px;
+    padding: 2px;
+    transition: background-color 0.18s ease;
+}
+
+.voice-channel-card.active {
+    background: rgba(88, 101, 242, 0.10);
+}
+
+.voice-channel-button,
+.channel-item.voice-channel-button {
+    width: 100%;
+    min-height: 36px;
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    border-radius: 8px;
+    background: transparent;
+    color: #b5bac1;
+    padding: 8px 10px;
+    font-weight: 700;
+}
+
+.voice-channel-button:hover,
+.channel-item.voice-channel-button:hover {
+    background: #35373d;
+    color: #f2f3f5;
+}
+
+.voice-channel-button.active,
+.channel-item.voice-channel-button.active {
+    background: #42464f;
+    color: #ffffff;
+}
+
+.channel-icon {
+    opacity: 0.85;
+    font-size: 13px;
+}
+
+.channel-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.channel-count {
+    min-width: 22px;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    color: #f2f3f5;
+    background: rgba(17, 18, 20, 0.75);
+}
+
+.voice-member-list,
+.channel-participants.voice-member-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 2px 6px 8px 34px;
+    font-size: 13px;
+}
+
+.voice-member-row {
+    width: 100%;
+    min-height: 30px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: #b5bac1;
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr) 8px;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    text-align: left;
+    cursor: default;
+}
+
+.voice-member-row:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: #f2f3f5;
+}
+
+.voice-member-row.self {
+    color: #ffffff;
+    background: rgba(88, 101, 242, 0.16);
+}
+
+.voice-member-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #5865f2, #7c3aed);
+    color: #ffffff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.voice-member-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.self-tag {
+    margin-left: 5px;
+    font-size: 11px;
+    color: #a5b4fc;
+    font-weight: 700;
+}
+
+.voice-member-status {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #23a559;
+    box-shadow: 0 0 0 3px rgba(35, 165, 89, 0.12);
+}
+
+.voice-channel-empty {
+    padding: 6px 8px;
+    color: #747b86;
+    font-size: 12px;
+}
+
+/* 主舞台：没有屏幕共享时展示更明确的空状态。 */
+.main-header-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.main-header-icon {
+    color: #8e959e;
+    font-weight: 900;
+}
+
+.main-header-text {
+    color: #f2f3f5;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.main-header-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.main-header-pill {
+    font-size: 12px;
+    color: #b5bac1;
+    background: #232428;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 999px;
+    padding: 6px 10px;
+}
+
+.stage-video-container {
+    position: relative;
+}
+
+.stage-empty-state {
+    width: min(560px, 86%);
+    min-height: 300px;
+    margin: auto;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 24px;
+    background:
+        radial-gradient(circle at top, rgba(88, 101, 242, 0.22), transparent 55%),
+        rgba(17, 18, 20, 0.88);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 34px;
+    color: #dbdee1;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.stage-empty-orb {
+    width: 74px;
+    height: 74px;
+    border-radius: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 34px;
+    background: linear-gradient(135deg, #5865f2, #7c3aed);
+    box-shadow: 0 18px 40px rgba(88, 101, 242, 0.32);
+    margin-bottom: 18px;
+}
+
+.stage-empty-state h2 {
+    color: #ffffff;
+    font-size: 22px;
+    margin-bottom: 10px;
+}
+
+.stage-empty-state p {
+    max-width: 440px;
+    color: #b5bac1;
+    font-size: 14px;
+    line-height: 1.7;
+    margin-bottom: 18px;
+}
+
+.stage-empty-tips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+}
+
+.stage-empty-tips span {
+    border-radius: 999px;
+    padding: 7px 11px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #dbdee1;
+    font-size: 12px;
+}
+
+/* 当屏幕共享或视频卡片出现时，自动隐藏空状态。 */
+#video-container:has(.video-wrapper) .stage-empty-state,
+#video-container:has(.screen-restore-card) .stage-empty-state {
+    display: none;
+}
+
+/* 聊天栏：更完整的标题与空状态。 */
+.chat-header {
+    justify-content: space-between;
+}
+
+.chat-title {
+    font-size: 14px;
+    font-weight: 800;
+    color: #f2f3f5;
+}
+
+.chat-subtitle {
+    margin-top: 2px;
+    font-size: 11px;
+    color: #8e959e;
+    font-weight: 500;
+}
+
+.chat-empty-state {
+    margin: auto;
+    max-width: 220px;
+    color: #8e959e;
+    text-align: center;
+    padding-top: 28px;
+}
+
+.chat-empty-icon {
+    width: 46px;
+    height: 46px;
+    margin: 0 auto 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 16px;
+    background: #232428;
+    font-size: 22px;
+}
+
+.chat-empty-title {
+    color: #dbdee1;
+    font-size: 13px;
+    font-weight: 800;
+    margin-bottom: 6px;
+}
+
+.chat-empty-desc {
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+#chat-messages:has(.chat-message) .chat-empty-state {
+    display: none;
+}
+
+.chat-content {
+    border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.chat-input-area {
+    align-items: center;
+}
+
+#chat-input {
+    min-height: 40px;
+    border-radius: 10px;
+    background: #1e1f22;
+}
+
+#btn-send {
+    height: 40px;
+    border-radius: 10px;
+}
+
+/* 左侧音量区稍微收紧，避免成员较多时挤压控制坞。 */
+.members-foldout #participant-list {
+    max-height: 230px;
+}
+
+/* 小屏时隐藏主舞台右上角提示，避免挤压标题。 */
+@media (max-width: 1050px) {
+    .main-header-pill {
+        display: none;
+    }
+
+    .stage-empty-state {
+        width: 92%;
+        min-height: 260px;
+        padding: 24px;
+    }
+}
+
+
+/* ==========================================
+   Stage 17：频道内成员音量与主舞台清理
+   ========================================== */
+
+/* 主舞台空状态卡片已移除，空舞台保持干净黑底。 */
+.stage-video-container:empty {
+    background:
+        radial-gradient(circle at 50% 15%, rgba(88, 101, 242, 0.12), transparent 34%),
+        #050607;
+}
+
+.stage-empty-state {
+    display: none !important;
+}
+
+/* 频道成员行支持内联音量调节。 */
+.voice-member-row {
+    cursor: default;
+}
+
+.voice-member-mainline {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.voice-member-mic {
+    font-size: 12px;
+    opacity: 0.78;
+    flex-shrink: 0;
+}
+
+.voice-member-volume-row {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 18px minmax(70px, 1fr) 46px 14px;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    padding-left: 28px;
+}
+
+.voice-member-volume-icon {
+    font-size: 11px;
+    color: #949ba4;
+}
+
+.voice-member-volume-slider {
+    width: 100%;
+    height: 5px;
+    -webkit-appearance: none;
+    appearance: none;
+    border-radius: 999px;
+    background: #4f545c;
+    outline: none;
+    cursor: pointer;
+}
+
+.voice-member-volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #f2f3f5;
+    border: 2px solid #313338;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35);
+}
+
+.voice-member-volume-number {
+    width: 46px;
+    height: 24px;
+    padding: 0 4px;
+    border-radius: 5px;
+    border: 1px solid #3b3d44;
+    background: #1e1f22;
+    color: #dbdee1;
+    font-size: 11px;
+    text-align: right;
+}
+
+.voice-member-volume-number::-webkit-outer-spin-button,
+.voice-member-volume-number::-webkit-inner-spin-button {
+    margin: 0;
+}
+
+.voice-member-volume-unit {
+    font-size: 11px;
+    color: #b5bac1;
+}
+
+/* 旧的当前频道音量面板保留为兼容面板，默认折叠，避免和频道内音量重复。 */
+.legacy-volume-foldout {
+    margin-top: 12px;
+    opacity: 0.88;
+}
+
+.legacy-volume-foldout:not([open]) {
+    padding-bottom: 2px;
+}
+
+.legacy-volume-foldout summary {
+    cursor: pointer;
+}
+
+/* 设置面板里的设备下拉框需要盖在 modal 内容上方。 */
+.audio-settings-modal select {
+    position: relative;
+    z-index: 2;
+}
+
+/* Stage 18：频道成员音量数值输入优化 */
+.voice-member-volume-row {
+    grid-template-columns: 18px minmax(80px, 1fr) 58px 14px;
+}
+
+.voice-member-volume-number {
+    width: 58px;
+    font-variant-numeric: tabular-nums;
+}
+
+.voice-member-volume-number:focus {
+    border-color: #5865f2;
+    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.25);
+}

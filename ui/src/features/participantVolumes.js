@@ -1,20 +1,38 @@
 import { USER_VOLUME_STORAGE_KEY } from '../shared/constants.js';
 import { logError } from '../shared/errors.js';
 
-// 远端成员音量统一存成 0~3 的 gain 值；界面滑块显示为 0~300%。
+// 远端成员音量统一存成 0~3 的 gain 值；界面统一显示和输入 0~300%。
 
-/** 把滑块百分比或旧版 gain 值统一转换成 0~3 的 gain。 */
+/**
+ * 把界面百分比转换成 0~3 的 gain。
+ *
+ * 注意：这里不再兼容“3 表示 300%”的旧输入语义。
+ * 前端所有音量滑块和数字输入都按百分比处理：
+ * - 3   => 3%   => gain 0.03
+ * - 100 => 100% => gain 1.0
+ * - 300 => 300% => gain 3.0
+ */
 export function normalizeGainValue(rawValue) {
     const n = Number(rawValue);
     if (!Number.isFinite(n)) return 1;
+    return Math.max(0, Math.min(n / 100, 3));
+}
 
-    // 兼容旧数据格式：历史版本可能直接保存 0~3，新版本滑块传入 0~300。
+/**
+ * 修正 localStorage 里历史版本保存的 gain。
+ *
+ * 历史数据可能已经是 0~3 的 gain，新 UI 输入则是 0~300 的百分比。
+ * 这个函数只用于读取旧数据，不用于处理新的 UI 输入。
+ */
+function normalizeStoredGainValue(rawValue) {
+    const n = Number(rawValue);
+    if (!Number.isFinite(n)) return 1;
     const gain = n > 3 ? n / 100 : n;
     return Math.max(0, Math.min(gain, 3));
 }
 
 export function gainToPercent(gain) {
-    return Math.round(Math.max(0, Math.min(gain, 3)) * 100);
+    return Math.round(Math.max(0, Math.min(Number(gain) || 0, 3)) * 100);
 }
 
 export function getDefaultVolumeState() {
@@ -37,7 +55,7 @@ export function loadUserVolumesFromStorage() {
             normalized[identity] = getDefaultVolumeState();
             ['mic', 'screen', 'appaudio'].forEach((source) => {
                 if (value[source] !== undefined) {
-                    normalized[identity][source] = normalizeGainValue(value[source]);
+                    normalized[identity][source] = normalizeStoredGainValue(value[source]);
                 }
             });
         });
@@ -70,7 +88,7 @@ export function ensureParticipantVolumeState(userVolumes, identity) {
         if (userVolumes[key][source] === undefined) {
             userVolumes[key][source] = 1;
         } else {
-            userVolumes[key][source] = normalizeGainValue(userVolumes[key][source]);
+            userVolumes[key][source] = normalizeStoredGainValue(userVolumes[key][source]);
         }
     });
 

@@ -1,17 +1,16 @@
 <script setup>
 defineEmits([
-  'switch-mic',
-  'switch-output',
   'toggle-mic',
   'toggle-monitor',
   'toggle-screen',
   'app-audio-click',
   'leave',
+  'open-settings',
 ]);
 </script>
 
 <template>
-  <!-- 左下角控制坞：保留按钮 id，供 rustMic/devices/screenShare 模块同步状态。 -->
+  <!-- 左下角控制坞：保留按钮 id，供 rustMic/screenShare/appAudio 模块同步状态。 -->
   <div id="user-control-panel" class="user-control-dock">
     <div class="user-profile">
       <div class="avatar">🎮</div>
@@ -19,24 +18,7 @@ defineEmits([
         <div id="ui-username" class="name">未连接大厅</div>
         <div id="ui-status" class="status">等待加入房间</div>
       </div>
-    </div>
-
-    <div class="device-selectors">
-      <select
-        id="mic-select"
-        disabled
-        @change="$emit('switch-mic', $event.target.value)"
-      >
-        <option value="">等待权限...</option>
-      </select>
-
-      <select
-        id="audio-output-select"
-        disabled
-        @change="$emit('switch-output', $event.target.value)"
-      >
-        <option value="default">默认扬声器</option>
-      </select>
+      <button class="user-settings-btn" title="音频设置" @click="$emit('open-settings')">⚙</button>
     </div>
 
     <div class="action-grid">
@@ -71,6 +53,7 @@ defineEmits([
       </div>
 
       <button id="btn-app-audio" class="grid-btn" disabled data-tooltip="共享应用音频" @click="$emit('app-audio-click')">🎵</button>
+      <button class="grid-btn" data-tooltip="音频设置" @click="$emit('open-settings')">⚙</button>
       <button id="btn-leave" class="grid-btn danger-btn" style="display: none;" data-tooltip="断开连接" @click="$emit('leave')">🚪</button>
     </div>
   </div>

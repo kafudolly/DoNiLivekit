@@ -1,17 +1,19 @@
 """
-DoNiChannel 后端入口。
+DoNiChannel 后端入口（FastAPI 版）。
 
-当前职责：
+职责：
 1. 提供 LiveKit token。
 2. 管理语音频道列表。
 3. 提供 Presence WebSocket，用于实时同步“谁在线、谁在哪个语音频道”。
-4. 在需要时提供前端静态文件。
+4. 兼容旧客户端的 /api/rooms 轮询接口。
 
-说明：
-- LiveKit 仍然负责音频、屏幕共享、Track 订阅。
+注意：
+- LiveKit 负责音频、屏幕共享、Track 订阅。
 - Presence WebSocket 只负责大厅在线状态和频道成员状态。
 - Rust 9001/9002 本地音频采集不经过这里。
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
@@ -23,11 +25,17 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from livekit.api import AccessToken, VideoGrants
+from livekit.api import (
+    LiveKitAPI,
+    AccessToken,
+    VideoGrants,
+    ListRoomsRequest,
+    ListParticipantsRequest,
+)
 
 
 # ============================================================
@@ -38,10 +46,8 @@ def get_base_dir() -> str:
     """
     返回后端运行目录。
 
-    普通运行时：返回 app.py 所在目录。
+    普通运行时：返回 main.py 所在目录。
     PyInstaller 打包后：返回 exe 所在目录。
-
-    这样 rooms.db、ui/dist 等路径在源码运行和 exe 运行时都比较稳定。
     """
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
@@ -51,8 +57,6 @@ def get_base_dir() -> str:
 BASE_DIR = get_base_dir()
 DB_PATH = os.path.join(BASE_DIR, "rooms.db")
 
-# 如果已经执行 npm run build，优先使用 ui/dist。
-# 如果还在开发阶段，则保底使用 ui 目录。
 UI_DIST_DIR = os.path.join(BASE_DIR, "ui", "dist")
 UI_SRC_DIR = os.path.join(BASE_DIR, "ui")
 UI_DIR = UI_DIST_DIR if os.path.exists(UI_DIST_DIR) else UI_SRC_DIR
@@ -64,8 +68,7 @@ LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "http://127.0.0.1:7880")
 DEFAULT_ROOMS = ["day0", "day1", "day2"]
 DEFAULT_ROOM_NAME = "team-meeting-room"
 
-
-app = FastAPI(title="DoNiChannel Backend", version="1.0.0")
+app = FastAPI(title="DoNiChannel Backend", version="1.0.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -81,22 +84,14 @@ app.add_middleware(
 # ============================================================
 
 def get_db_conn() -> sqlite3.Connection:
-    """
-    创建 SQLite 连接。
-
-    row_factory 用于让查询结果可以按字段名访问，例如 row["room_name"]。
-    """
+    """创建 SQLite 连接。"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db() -> None:
-    """
-    初始化语音频道表。
-
-    如果数据库为空，则写入默认频道 day0/day1/day2。
-    """
+    """初始化语音频道表。"""
     conn = get_db_conn()
     try:
         conn.execute(
@@ -121,12 +116,7 @@ def init_db() -> None:
 
 
 def get_all_rooms_from_db() -> List[str]:
-    """
-    从 SQLite 读取全部语音频道。
-
-    注意：这个函数只返回频道列表，不再负责实时成员状态。
-    实时成员状态由 PresenceManager 维护。
-    """
+    """从 SQLite 读取全部语音频道。"""
     conn = get_db_conn()
     try:
         rows = conn.execute("SELECT room_name FROM rooms ORDER BY id ASC").fetchall()
@@ -136,11 +126,7 @@ def get_all_rooms_from_db() -> List[str]:
 
 
 def add_room_to_db(room_name: str) -> None:
-    """
-    新增语音频道。
-
-    INSERT OR IGNORE 可以避免重复创建同名频道时报错。
-    """
+    """新增语音频道。"""
     conn = get_db_conn()
     try:
         conn.execute(
@@ -156,7 +142,7 @@ init_db()
 
 
 # ============================================================
-# LiveKit token
+# LiveKit token / rooms 兼容接口
 # ============================================================
 
 def build_token(user_name: str, room_name: str, identity: Optional[str] = None) -> str:
@@ -164,13 +150,10 @@ def build_token(user_name: str, room_name: str, identity: Optional[str] = None) 
     生成 LiveKit 连接 token。
 
     identity 是 LiveKit 内部唯一身份。
-    displayName 是 UI 上显示的名字。
-
-    如果没有传 identity，则自动生成一个短随机后缀，避免同名用户冲突。
+    display name 使用用户输入的 user_name。
     """
     clean_user = (user_name or "访客").strip() or "访客"
     clean_room = (room_name or DEFAULT_ROOM_NAME).strip() or DEFAULT_ROOM_NAME
-
     livekit_identity = identity or f"{clean_user}-{uuid.uuid4().hex[:8]}"
 
     token = (
@@ -184,8 +167,33 @@ def build_token(user_name: str, room_name: str, identity: Optional[str] = None) 
             )
         )
     )
-
     return token.to_jwt()
+
+
+async def list_livekit_rooms_and_participants() -> dict:
+    """
+    从 LiveKit 查询当前活跃房间和房间内成员。
+
+    这是旧客户端 /api/rooms 轮询的兼容数据源。
+    新客户端实时成员状态应走 /ws/presence。
+    """
+    result = {}
+
+    async with LiveKitAPI(LIVEKIT_URL, API_KEY, API_SECRET) as lkapi:
+        try:
+            rooms_resp = await lkapi.room.list_rooms(ListRoomsRequest())
+            for room in rooms_resp.rooms:
+                parts_resp = await lkapi.room.list_participants(
+                    ListParticipantsRequest(room=room.name)
+                )
+                result[room.name] = [
+                    participant.name if participant.name else participant.identity
+                    for participant in parts_resp.participants
+                ]
+        except Exception as error:
+            print(f"[rooms] 获取 LiveKit 房间成员失败: {error}")
+
+    return result
 
 
 # ============================================================
@@ -194,19 +202,7 @@ def build_token(user_name: str, room_name: str, identity: Optional[str] = None) 
 
 @dataclass
 class PresenceParticipant:
-    """
-    Presence 层的在线用户状态。
-
-    identity:
-        当前连接的唯一 ID。可以和 LiveKit identity 保持一致。
-
-    display_name:
-        UI 显示名，例如 rain、黄前久美子。
-
-    current_channel:
-        用户当前所在语音频道。进入大厅但未进频道时为 None。
-    """
-
+    """Presence 层在线用户状态。"""
     identity: str
     display_name: str
     current_channel: Optional[str] = None
@@ -216,8 +212,7 @@ class PresenceManager:
     """
     管理大厅在线状态和语音频道成员状态。
 
-    它只负责 Presence，不负责音频。
-    音频、屏幕共享、远端 Track 仍然交给 LiveKit。
+    只负责 Presence，不负责音频。
     """
 
     def __init__(self) -> None:
@@ -226,12 +221,7 @@ class PresenceManager:
         self.lock = asyncio.Lock()
 
     def build_snapshot(self) -> dict:
-        """
-        构建完整 Presence 快照。
-
-        前端首次连接和断线重连后，都应该使用 snapshot 覆盖本地状态，
-        避免因为断线期间漏掉增量事件导致状态错乱。
-        """
+        """构建完整 Presence 快照。"""
         room_names = get_all_rooms_from_db()
 
         channels = []
@@ -269,14 +259,20 @@ class PresenceManager:
             "participants": participants,
         }
 
-    async def connect(self, websocket: WebSocket, identity: str, display_name: str) -> None:
+    async def connect(self, websocket: WebSocket, identity: str, display_name: str) -> bool:
         """
         注册 Presence WebSocket 连接。
 
-        同一个 identity 可能因为刷新、重连、切频道过程中的重复调用而再次连接。
-        新连接应该替换旧连接，但旧连接后续断开时不能误删新连接。
+        修复点：
+        - 同一 identity 重连时，新连接替换旧连接。
+        - 旧连接断开时不能误删新连接。
+        - accept 后、发送 snapshot 前客户端可能已经断开，必须捕获异常。
         """
-        await websocket.accept()
+        try:
+            await websocket.accept()
+        except Exception as error:
+            print(f"[presence] WebSocket accept 失败: identity={identity}, error={error}")
+            return False
 
         old_websocket = None
         was_online = False
@@ -303,9 +299,17 @@ class PresenceManager:
             except Exception:
                 pass
 
-        await websocket.send_text(
-            json.dumps(self.build_snapshot(), ensure_ascii=False)
-        )
+        try:
+            await websocket.send_text(
+                json.dumps(self.build_snapshot(), ensure_ascii=False)
+            )
+        except Exception as error:
+            print(
+                f"[presence] 发送初始快照失败，按正常断开处理: "
+                f"identity={identity}, error={error}"
+            )
+            await self.disconnect(identity, websocket)
+            return False
 
         if not was_online:
             await self.broadcast(
@@ -314,20 +318,20 @@ class PresenceManager:
                     "participant": {
                         "identity": identity,
                         "displayName": display_name,
-                        "currentChannel": None,
+                        "currentChannel": old_channel,
                     },
                 },
                 exclude_identity=identity,
             )
 
+        return True
+
     async def disconnect(self, identity: str, websocket: Optional[WebSocket] = None) -> None:
         """
-        注销 Presence WebSocket 连接。
+        注销 Presence 连接。
 
-        websocket 参数用于判断：当前断开的连接是否仍然是 active_connections 中的有效连接。
-
-        如果旧连接 A 断开，但 active_connections[identity] 已经变成新连接 B，
-        那么这里必须直接 return，不能把 B 删除。
+        如果断开的是旧连接，而 active_connections[identity] 已经是新连接，
+        则直接忽略，不能误删新连接。
         """
         async with self.lock:
             current_websocket = self.active_connections.get(identity)
@@ -349,11 +353,7 @@ class PresenceManager:
             )
 
     async def move_to_channel(self, identity: str, channel_id: Optional[str]) -> None:
-        """
-        把用户移动到指定语音频道。
-
-        channel_id 为 None 或空字符串时，表示用户离开语音频道但仍在大厅。
-        """
+        """把用户移动到指定语音频道。"""
         clean_channel = (channel_id or "").strip() or None
 
         if clean_channel is not None and clean_channel not in get_all_rooms_from_db():
@@ -378,35 +378,30 @@ class PresenceManager:
         await self.broadcast(payload)
 
     async def broadcast_room_created(self, room_name: str) -> None:
-        """
-        频道创建后广播完整快照。
-
-        频道结构变化不频繁，直接广播 snapshot 更简单可靠。
-        """
+        """频道创建后广播完整快照。"""
         await self.broadcast(self.build_snapshot())
 
-    async def send_to(self, identity: str, payload: dict) -> None:
-        """
-        向指定用户发送 Presence 消息。
-
-        发送失败时不在这里直接删除连接，
-        断开清理统一交给 WebSocketDisconnect 分支。
-        """
+    async def send_to(self, identity: str, payload: dict) -> bool:
+        """向指定用户发送 Presence 消息；失败则清理连接。"""
         websocket = self.active_connections.get(identity)
         if not websocket:
-            return
+            return False
 
-        await websocket.send_text(json.dumps(payload, ensure_ascii=False))
+        try:
+            await websocket.send_text(json.dumps(payload, ensure_ascii=False))
+            return True
+        except Exception as error:
+            print(f"[presence] 向客户端发送消息失败，清理连接: identity={identity}, error={error}")
+            await self.disconnect(identity, websocket)
+            return False
 
     async def broadcast(self, payload: dict, exclude_identity: Optional[str] = None) -> None:
         """
         向所有在线 Presence 客户端广播消息。
 
-        发送失败时，需要带上失败的 websocket 一起清理。
-        这样可以避免旧连接发送失败后误删同 identity 的新连接。
+        发送失败时，带具体 websocket 清理，避免旧连接失败误删新连接。
         """
         message = json.dumps(payload, ensure_ascii=False)
-
         dead_connections = []
 
         for identity, websocket in list(self.active_connections.items()):
@@ -431,32 +426,21 @@ presence_manager = PresenceManager()
 
 @app.get("/")
 async def index():
-    """
-    返回前端入口文件。
-
-    Tauri 开发模式下通常走 Vite 5173；
-    这个路由主要用于浏览器直接访问后端或打包部署时兜底。
-    """
+    """返回前端入口文件。"""
     index_path = os.path.join(UI_DIR, "index.html")
-
     if not os.path.exists(index_path):
-        raise HTTPException(
-            status_code=404,
-            detail=f"未找到前端入口文件: {index_path}",
-        )
-
+        raise HTTPException(status_code=404, detail=f"未找到前端入口文件: {index_path}")
     return FileResponse(index_path)
 
 
 @app.get("/api/get_token")
 @app.get("/token")
-async def get_token(user: str = "访客", room: str = DEFAULT_ROOM_NAME, identity: Optional[str] = None):
-    """
-    获取 LiveKit token。
-
-    前端进入某个语音频道前会调用这个接口。
-    identity 可选；如果前端已经有 Presence identity，可以传进来保持一致。
-    """
+async def get_token(
+    user: str = "访客",
+    room: str = DEFAULT_ROOM_NAME,
+    identity: Optional[str] = None,
+):
+    """获取 LiveKit token。"""
     token_jwt = build_token(user_name=user, room_name=room, identity=identity)
     return {"token": token_jwt, "room": room}
 
@@ -464,51 +448,50 @@ async def get_token(user: str = "访客", room: str = DEFAULT_ROOM_NAME, identit
 @app.get("/api/rooms")
 async def get_rooms():
     """
-    获取频道列表。
+    获取频道列表和当前频道成员。
 
-    重要：
-    这个接口以后只负责“有哪些频道”，不再作为实时成员状态来源。
-    实时成员状态由 /ws/presence 推送。
+    旧客户端兼容：participants 从 LiveKit 查询。
+    新客户端实时成员状态走 Presence WebSocket。
     """
-    rooms = get_all_rooms_from_db()
-    snapshot = presence_manager.build_snapshot()
+    db_rooms = get_all_rooms_from_db()
+    livekit_map = {}
 
-    channel_map = {channel["id"]: channel for channel in snapshot["channels"]}
+    try:
+        livekit_map = await list_livekit_rooms_and_participants()
+    except Exception as error:
+        print(f"[rooms] LiveKit room sync failed: {error}")
 
-    # 为了兼容当前前端，暂时仍返回 participants 字段。
-    # 后续前端接入 /ws/presence 后，可以不再依赖这个字段。
+    merged_names = []
+    seen = set()
+    for name in db_rooms + list(livekit_map.keys()):
+        if name in seen:
+            continue
+        seen.add(name)
+        merged_names.append(name)
+
     payload = [
         {
-            "name": room_name,
-            "participants": [
-                member["displayName"]
-                for member in channel_map.get(room_name, {}).get("members", [])
-            ],
+            "name": name,
+            "participants": livekit_map.get(name, []),
         }
-        for room_name in rooms
+        for name in merged_names
     ]
 
     return JSONResponse(payload)
 
 
 @app.post("/api/rooms")
-async def create_room(body: dict):
-    """
-    创建语音频道。
-
-    创建成功后广播 Presence 快照，让已连接大厅的客户端立即看到新频道。
-    """
+async def create_room(body: dict = Body(default_factory=dict)):
+    """创建语音频道。"""
     room_name = str(body.get("name") or body.get("room_name") or "").strip()
 
     if not room_name:
         raise HTTPException(status_code=400, detail="房间名不能为空")
-
     if len(room_name) > 64:
         raise HTTPException(status_code=400, detail="房间名过长，最多 64 个字符")
 
     add_room_to_db(room_name)
     await presence_manager.broadcast_room_created(room_name)
-
     return {"ok": True, "name": room_name}
 
 
@@ -521,21 +504,11 @@ async def presence_websocket(websocket: WebSocket):
     """
     Presence WebSocket 入口。
 
-    连接参数：
-    ws://host:5000/ws/presence?user=rain&identity=rain-a1b2c3d4
-
-    前端发送的消息示例：
-    {"type": "join_channel", "channelId": "day0"}
-    {"type": "leave_channel"}
-    {"type": "ping"}
-
-    后端推送：
-    presence_snapshot
-    participant_online
-    participant_offline
-    participant_moved
-    pong
-    error
+    前端消息：
+    - {"type":"join_channel", "channelId":"day0"}
+    - {"type":"leave_channel"}
+    - {"type":"request_snapshot"}
+    - {"type":"ping"}
     """
     user = websocket.query_params.get("user", "访客").strip() or "访客"
     identity = websocket.query_params.get("identity")
@@ -543,7 +516,14 @@ async def presence_websocket(websocket: WebSocket):
     if not identity:
         identity = f"{user}-{uuid.uuid4().hex[:8]}"
 
-    await presence_manager.connect(websocket, identity=identity, display_name=user)
+    connected = await presence_manager.connect(
+        websocket,
+        identity=identity,
+        display_name=user,
+    )
+
+    if not connected:
+        return
 
     try:
         while True:
@@ -552,39 +532,33 @@ async def presence_websocket(websocket: WebSocket):
             try:
                 message = json.loads(raw_message)
             except json.JSONDecodeError:
-                await websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "message": "Presence 消息不是合法 JSON",
-                            "raw": raw_message,
-                        },
-                        ensure_ascii=False,
-                    )
+                await presence_manager.send_to(
+                    identity,
+                    {
+                        "type": "error",
+                        "message": "Presence 消息不是合法 JSON",
+                        "raw": raw_message,
+                    },
                 )
                 continue
 
             message_type = message.get("type")
 
             if message_type == "ping":
-                await websocket.send_text(
-                    json.dumps({"type": "pong"}, ensure_ascii=False)
-                )
+                await presence_manager.send_to(identity, {"type": "pong"})
 
             elif message_type == "join_channel":
                 channel_id = message.get("channelId")
                 try:
                     await presence_manager.move_to_channel(identity, channel_id)
                 except ValueError as error:
-                    await websocket.send_text(
-                        json.dumps(
-                            {
-                                "type": "error",
-                                "message": str(error),
-                                "action": "join_channel",
-                            },
-                            ensure_ascii=False,
-                        )
+                    await presence_manager.send_to(
+                        identity,
+                        {
+                            "type": "error",
+                            "message": str(error),
+                            "action": "join_channel",
+                        },
                     )
 
             elif message_type == "leave_channel":
@@ -594,14 +568,12 @@ async def presence_websocket(websocket: WebSocket):
                 await presence_manager.send_to(identity, presence_manager.build_snapshot())
 
             else:
-                await websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "message": f"未知 Presence 消息类型: {message_type}",
-                        },
-                        ensure_ascii=False,
-                    )
+                await presence_manager.send_to(
+                    identity,
+                    {
+                        "type": "error",
+                        "message": f"未知 Presence 消息类型: {message_type}",
+                    },
                 )
 
     except WebSocketDisconnect:
@@ -609,10 +581,7 @@ async def presence_websocket(websocket: WebSocket):
 
     except RuntimeError as error:
         error_text = str(error)
-
-        # 用户主动退出大厅、刷新页面、关闭窗口时，WebSocket 可能已经进入关闭状态。
-        # 这属于正常断开流程，不需要按异常打印。
-        if 'WebSocket is not connected' in error_text:
+        if "WebSocket is not connected" in error_text:
             await presence_manager.disconnect(identity, websocket)
             return
 
@@ -623,24 +592,25 @@ async def presence_websocket(websocket: WebSocket):
         print(f"[presence] WebSocket 异常: identity={identity}, error={error}")
         await presence_manager.disconnect(identity, websocket)
 
+
 # ============================================================
 # 静态资源兜底
 # ============================================================
 
-if os.path.exists(UI_DIR):
-    app.mount(
-        "/assets",
-        StaticFiles(directory=os.path.join(UI_DIR, "assets")),
-        name="assets",
-    ) if os.path.exists(os.path.join(UI_DIR, "assets")) else None
+assets_dir = os.path.join(UI_DIR, "assets")
+if os.path.exists(assets_dir):
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
+
+# ============================================================
+# 本地启动入口
+# ============================================================
 
 def run_server() -> None:
     """
     启动 FastAPI 后端服务。
 
-    打包成 exe 后，不能使用 "app:app" 或 "main:app" 这种字符串导入方式，
-    否则 uvicorn 可能找不到模块并直接闪退。
+    PyInstaller 打包后必须直接传 app 对象，不能使用 "main:app" 字符串。
     """
     uvicorn.run(
         app,

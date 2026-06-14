@@ -133,18 +133,67 @@ export async function switchMic(deviceId, context) {
     }
 }
 
+/** 尝试请求一次浏览器音频权限，用于解锁设备真实名称。 */
+async function requestAudioDeviceLabelPermission() {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') return;
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream.getTracks().forEach((track) => track.stop());
+    } catch (_) {
+        // 用户拒绝或 WebView 不支持时，仍然允许后续 enumerateDevices 返回默认设备。
+    }
+}
+
+/** 去重并清理音频输出设备。 */
+function normalizeAudioOutputs(devices) {
+    const seen = new Set();
+    const rows = [];
+
+    (Array.isArray(devices) ? devices : []).forEach((device) => {
+        if (!device || device.kind !== 'audiooutput') return;
+        const id = device.deviceId || '';
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        rows.push(device);
+    });
+
+    return rows;
+}
+
 /** 刷新输出设备列表，并选中上次保存的扬声器。 */
-export async function updateAudioOutputList({ selectedAudioOutputId }) {
+export async function updateAudioOutputList({ selectedAudioOutputId, LivekitClient }) {
     const selectEl = document.getElementById('audio-output-select');
     if (!selectEl) return;
+
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== 'function') {
-        selectEl.innerHTML = '<option value="default">当前浏览器不支持输出设备切换</option>';
+        selectEl.innerHTML = '<option value="default">当前 WebView 不支持输出设备切换</option>';
+        selectEl.disabled = true;
         return;
     }
 
     try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const outputs = devices.filter(d => d.kind === 'audiooutput');
+        selectEl.disabled = false;
+
+        let outputs = [];
+
+        // LiveKit 会在部分 WebView 中更稳定地触发设备枚举权限流程。
+        if (LivekitClient?.Room?.getLocalDevices) {
+            try {
+                outputs = normalizeAudioOutputs(
+                    await LivekitClient.Room.getLocalDevices('audiooutput', true)
+                );
+            } catch (error) {
+                logError('devices/updateAudioOutputList LiveKit 输出设备枚举失败，回退到 enumerateDevices', error, 'warn');
+            }
+        }
+
+        // 如果只拿到空标签/极少设备，主动请求一次音频权限后重新枚举。
+        if (outputs.length <= 1 || outputs.every((device) => !device.label)) {
+            await requestAudioDeviceLabelPermission();
+            outputs = normalizeAudioOutputs(await navigator.mediaDevices.enumerateDevices());
+        }
+
         selectEl.innerHTML = '';
 
         const defaultOption = document.createElement('option');
@@ -156,6 +205,7 @@ export async function updateAudioOutputList({ selectedAudioOutputId }) {
             const option = document.createElement('option');
             option.value = device.deviceId;
             option.text = device.label || `音频输出设备 (${device.deviceId.slice(0, 6)}...)`;
+            option.title = device.label || device.deviceId;
             selectEl.appendChild(option);
         });
 
@@ -167,38 +217,31 @@ export async function updateAudioOutputList({ selectedAudioOutputId }) {
     }
 }
 
-/** 切换输出设备；同时作用于远端音频 AudioContext 和 Rust 麦克风耳返。 */
+/** 切换输出设备；同时作用于远端音频 AudioContext、Rust 麦克风耳返和 audio 元素。 */
 export async function switchAudioOutput(deviceId, context) {
     const selectedAudioOutputId = deviceId || 'default';
     localStorage.setItem('lk_audio_output', selectedAudioOutputId);
 
-    const remoteAudioContext = context.getRemoteAudioContext?.();
-    if (remoteAudioContext && typeof remoteAudioContext.setSinkId === 'function') {
+    // setSinkId('default') 在部分 WebView 中会报 NotFoundError。
+    // 使用空字符串表示回到系统默认设备。
+    const sinkId = selectedAudioOutputId === 'default' ? '' : selectedAudioOutputId;
+
+    async function applySinkId(target, label) {
+        if (!target || typeof target.setSinkId !== 'function') return;
+
         try {
-            await remoteAudioContext.setSinkId(selectedAudioOutputId);
+            await target.setSinkId(sinkId);
         } catch (e) {
-            logError('devices/switchAudioOutput 切换远端 AudioContext 输出设备失败', e, 'warn');
+            logError(`devices/switchAudioOutput 切换${label}输出设备失败`, e, 'warn');
         }
     }
 
-    const localRustMicAudioContext = context.getLocalRustMicAudioContext?.();
-    if (localRustMicAudioContext && typeof localRustMicAudioContext.setSinkId === 'function') {
-        try {
-            await localRustMicAudioContext.setSinkId(selectedAudioOutputId);
-        } catch (e) {
-            logError('devices/switchAudioOutput 切换 Rust 麦克风耳返输出设备失败', e, 'warn');
-        }
-    }
+    await applySinkId(context.getRemoteAudioContext?.(), '远端 AudioContext');
+    await applySinkId(context.getLocalRustMicAudioContext?.(), 'Rust 麦克风耳返');
 
     const audioEls = document.querySelectorAll('#audio-container audio');
     for (const audioEl of audioEls) {
-        if (typeof audioEl.setSinkId === 'function') {
-            try {
-                await audioEl.setSinkId(selectedAudioOutputId);
-            } catch (e) {
-                logError('devices/switchAudioOutput 切换 audio 元素输出设备失败', e, 'warn');
-            }
-        }
+        await applySinkId(audioEl, 'audio 元素');
     }
 
     return selectedAudioOutputId;

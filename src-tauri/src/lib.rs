@@ -1206,20 +1206,29 @@ fn run_mic_capture(
 }
 */
 
-// 防炸麦软拐点限幅器 (Soft-knee Limiter)
+// 防炸麦软拐点限幅器。
+// 设计目标：尽量保留小音量动态；大音量只做平滑压缩，避免硬削顶形成方波失真。
 #[inline]
 fn soft_limit(sample: f32) -> f32 {
-    let threshold = 0.7f32; // 警告线：超过 0.7 开始介入压缩
-    let ceiling = 0.99f32;  // 天花板：绝对死线，永不突破 1.0 防止爆音
-    let abs_s = sample.abs();
+    const KNEE_START: f32 = 0.68;
+    const CEILING: f32 = 0.96;
 
-    if abs_s <= threshold {
-        sample // 安全区内原汁原味输出
-    } else {
-        let over = abs_s - threshold;
-        let safe_over = over / (1.0 + over / (ceiling - threshold));
-        sample.signum() * (threshold + safe_over)
+    if !sample.is_finite() {
+        return 0.0;
     }
+
+    let abs_s = sample.abs();
+    if abs_s <= KNEE_START {
+        return sample;
+    }
+
+    let sign = sample.signum();
+    let knee_width = CEILING - KNEE_START;
+    let over = ((abs_s - KNEE_START) / knee_width).max(0.0);
+
+    // 指数软压缩：输入越大越接近 CEILING，但不会突然硬切。
+    let compressed = KNEE_START + knee_width * (1.0 - (-over).exp());
+    sign * compressed.min(CEILING)
 }
 
 #[cfg(target_os = "windows")]
@@ -1380,8 +1389,12 @@ fn run_mic_capture(
                     };
 
                     let mut normalized_frame = [0.0f32; 480];
+                    let mut boosted_frame = [0.0f32; 480];
+                    let mut peak = 0.0f32;
                     let mut sum_squares = 0.0f32;
 
+                    // 第一遍：RNNoise 量纲还原 + 用户增益。
+                    // 这里先不直接限幅，而是统计整帧峰值，避免单个大声样本把波形硬削成方波。
                     for i in 0..480 {
                         let mut sample = out_frame[i];
 
@@ -1389,14 +1402,26 @@ fn run_mic_capture(
                             sample = 0.0;
                         }
 
-                        // 核心修复：RNNoise 输出必须除以 32768.0
+                        // RNNoise 输出是 32768 量级，必须先还原到 [-1.0, 1.0]。
                         let normalized = (sample / 32768.0).clamp(-1.0, 1.0);
-
-                        // 保留你原来的 5.0 增益逻辑，但必须在 [-1, 1] 体系里做
                         let boosted = normalized * boost_multiplier;
 
-                        // 使用 soft_limit，而不是硬 clamp
-                        let final_sample = soft_limit(boosted).clamp(-0.98, 0.98);
+                        boosted_frame[i] = if boosted.is_finite() { boosted } else { 0.0 };
+                        peak = peak.max(boosted_frame[i].abs());
+                    }
+
+                    // 第二遍：整帧峰值保护 + soft-knee limiter。
+                    // 如果用户增益较大且说话突然变响，先按整帧比例压下来，尽量保留波形形状。
+                    const FRAME_PEAK_TARGET: f32 = 0.90;
+                    let peak_gain = if peak > FRAME_PEAK_TARGET {
+                        FRAME_PEAK_TARGET / peak
+                    } else {
+                        1.0
+                    };
+
+                    for i in 0..480 {
+                        let protected = boosted_frame[i] * peak_gain;
+                        let final_sample = soft_limit(protected).clamp(-0.96, 0.96);
 
                         normalized_frame[i] = final_sample;
                         sum_squares += final_sample * final_sample;
@@ -1445,7 +1470,7 @@ fn run_mic_capture(
                         let mut gated_data = Vec::<u8>::with_capacity(480 * 4);
 
                         for sample in normalized_frame {
-                            let gated = (sample * gate_gain).clamp(-0.98, 0.98);
+                            let gated = soft_limit(sample * gate_gain).clamp(-0.96, 0.96);
                             gated_data.extend_from_slice(&gated.to_le_bytes());
                         }
 

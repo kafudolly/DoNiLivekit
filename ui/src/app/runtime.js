@@ -42,6 +42,8 @@ let remoteAudioContext = null;
 let localAppAudioPublication = null;
 let isAppAudioSharing = false;
 let selectedAudioOutputId = localStorage.getItem('lk_audio_output') || 'default';
+const VAD_THRESHOLD_STORAGE_KEY = 'lk_vad_threshold';
+const MIC_BOOST_STORAGE_KEY = 'lk_mic_boost';
 
 const userVolumes = loadUserVolumesFromStorage();
 const audioPipelinesFeature = createAudioPipelinesFeature();
@@ -49,7 +51,8 @@ let roomConnectionFeature;
 
 const presenceClient = createPresenceClient({
     logError,
-    onMessage: () => {
+    onMessage: (message) => {
+        roomConnectionFeature?.applyPresenceMessage?.(message);
         requestStoreSync();
     },
 });
@@ -272,6 +275,13 @@ function clearRemoteGainNodes() { return remoteAudioFeature.clearRemoteGainNodes
 function removeRemoteAudioRouteByTrackSid(trackSid) { return remoteAudioFeature.removeRemoteAudioRouteByTrackSid(trackSid); }
 function setParticipantVolume(identity, source, volumeValue) { return remoteAudioFeature.setParticipantVolume(identity, source, volumeValue); }
 
+/** 返回某个成员某类音源的界面百分比，范围 0~300。 */
+function getParticipantVolumePercent(identity, source = 'mic') {
+    const volumes = ensureParticipantVolumeState(identity);
+    const gain = volumes[source] !== undefined ? volumes[source] : 1;
+    return gainToPercent(gain);
+}
+
 function updateParticipantList() { return participantsFeature.updateParticipantList(); }
 function updateActiveSpeakerUI() { return participantsFeature.updateActiveSpeakerUI(); }
 function toggleLocalScreenSubscription(identity) { return livekitEventsFeature.toggleLocalScreenSubscription(identity); }
@@ -332,6 +342,7 @@ async function switchMic(deviceId) {
 async function updateAudioOutputList() {
     return updateAudioOutputListFromModule({
         selectedAudioOutputId,
+        LivekitClient,
     });
 }
 
@@ -367,24 +378,52 @@ function initLegacyDomBlock2() {
     const boostSlider = document.getElementById('vad-boost-input');
     const boostText = document.getElementById('vad-boost-text');
 
+    function clampNumber(value, min, max, fallback) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.max(min, Math.min(n, max));
+    }
+
+    function applyVadThreshold(value, { persist = true } = {}) {
+        const val = clampNumber(value, 0, 100, 20);
+        if (slider) slider.value = String(val);
+        if (marker) marker.style.left = val + '%';
+        if (text) text.innerText = val + '%';
+        if (persist) localStorage.setItem(VAD_THRESHOLD_STORAGE_KEY, String(val));
+
+        invoke('set_mic_vad_threshold', { val }).catch((error) => {
+            logError('runtime/vadSlider 设置麦克风阈值失败', error);
+        });
+    }
+
+    function applyMicBoost(value, { persist = true } = {}) {
+        const val = clampNumber(value, 1, 20, 5);
+        const sliderValue = Math.round(val * 10);
+        if (boostSlider) boostSlider.value = String(sliderValue);
+        if (boostText) boostText.innerText = val.toFixed(1) + 'x';
+        if (persist) localStorage.setItem(MIC_BOOST_STORAGE_KEY, String(val));
+
+        invoke('set_mic_boost', { val }).catch((error) => {
+            logError('runtime/boostSlider 设置麦克风增益失败', error);
+        });
+    }
+
     if (slider) {
+        const savedThreshold = localStorage.getItem(VAD_THRESHOLD_STORAGE_KEY);
+        applyVadThreshold(savedThreshold ?? slider.value ?? 20, { persist: false });
+
         slider.addEventListener('input', (e) => {
-            const val = e.target.value;
-            if (marker) marker.style.left = val + '%';
-            if (text) text.innerText = val + '%';
-            invoke('set_mic_vad_threshold', { val: parseFloat(val) }).catch((error) => {
-                logError('runtime/vadSlider 设置麦克风阈值失败', error);
-            });
+            applyVadThreshold(e.target.value);
         });
     }
 
     if (boostSlider) {
+        const savedBoost = localStorage.getItem(MIC_BOOST_STORAGE_KEY);
+        const initialBoost = savedBoost ?? (Number(boostSlider.value || 50) / 10.0);
+        applyMicBoost(initialBoost, { persist: false });
+
         boostSlider.addEventListener('input', (e) => {
-            const val = parseInt(e.target.value) / 10.0;
-            if (boostText) boostText.innerText = val.toFixed(1) + 'x';
-            invoke('set_mic_boost', { val }).catch((error) => {
-                logError('runtime/boostSlider 设置麦克风增益失败', error);
-            });
+            applyMicBoost(Number(e.target.value) / 10.0);
         });
     }
 
@@ -452,6 +491,8 @@ export {
     stopRoomPolling,
     switchMic,
     switchAudioOutput,
+    setParticipantVolume,
+    getParticipantVolumePercent,
     toggleMic,
     toggleMicMonitor,
     toggleScreen,

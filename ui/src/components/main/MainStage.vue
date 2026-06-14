@@ -1,8 +1,19 @@
 <template>
   <!-- 主舞台：LiveKit 远端媒体由 livekitEvents.js 挂载到 #video-container/#audio-container。 -->
   <main id="main-area" class="main-stage">
-    <div id="header" class="main-header"># 🎮 直播与共享大厅</div>
+    <header id="header" class="main-header">
+      <div class="main-header-title">
+        <span class="main-header-icon">#</span>
+        <span class="main-header-text">语音主舞台</span>
+      </div>
+      <div class="main-header-actions">
+        <span class="main-header-pill">屏幕共享 / 语音 / 应用音频</span>
+      </div>
+    </header>
+
+    <!-- 不再放大块提示卡片。没有屏幕共享时保持干净舞台，媒体元素会由 LiveKit 逻辑动态挂载。 -->
     <div id="video-container" class="stage-video-container"></div>
+
     <div id="audio-container"></div>
 
     <div id="local-screen-preview-box">

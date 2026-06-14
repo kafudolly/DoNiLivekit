@@ -1,20 +1,18 @@
 <script setup>
 import ChannelList from './ChannelList.vue';
 import ParticipantList from './ParticipantList.vue';
-import VadPanel from './VadPanel.vue';
 import ControlDock from '../controls/ControlDock.vue';
 
 defineEmits([
   'join-room',
   'create-channel',
   'switch-channel',
-  'switch-mic',
-  'switch-output',
   'toggle-mic',
   'toggle-monitor',
   'toggle-screen',
   'app-audio-click',
   'leave',
+  'open-settings',
 ]);
 </script>
 
@@ -25,7 +23,7 @@ defineEmits([
         <div class="server-name">DoNiChannel</div>
         <div class="server-subtitle">局域网语音大厅</div>
       </div>
-      <button class="server-header-btn" title="服务器菜单">⌄</button>
+      <button class="server-header-btn" title="设置" @click="$emit('open-settings')">⚙</button>
     </header>
 
     <div class="sidebar-scroll-area">
@@ -44,31 +42,22 @@ defineEmits([
         <ChannelList @switch-channel="$emit('switch-channel', $event)" />
       </section>
 
-      <details class="sidebar-foldout members-foldout" open>
+      <details class="sidebar-foldout members-foldout legacy-volume-foldout">
         <summary>
-          <span>当前频道成员</span>
+          <span>高级音量面板</span>
           <span class="summary-count" id="user-count">0</span>
         </summary>
         <ParticipantList />
       </details>
-
-      <details class="sidebar-foldout audio-foldout">
-        <summary>
-          <span>音频设置</span>
-          <span class="summary-hint">阈值 / 增益</span>
-        </summary>
-        <VadPanel />
-      </details>
     </div>
 
     <ControlDock
-      @switch-mic="$emit('switch-mic', $event)"
-      @switch-output="$emit('switch-output', $event)"
       @toggle-mic="$emit('toggle-mic')"
       @toggle-monitor="$emit('toggle-monitor')"
       @toggle-screen="$emit('toggle-screen')"
       @app-audio-click="$emit('app-audio-click')"
       @leave="$emit('leave')"
+      @open-settings="$emit('open-settings')"
     />
   </aside>
 </template>

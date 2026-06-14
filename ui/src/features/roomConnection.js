@@ -10,6 +10,7 @@ export function createRoomConnectionFeature(context) {
     let isPolling = false;
     let shouldRestoreMicAfterChannelSwitch = false;
     let isSwitchingChannel = false;
+    const LAST_CHANNEL_STORAGE_KEY = 'lk_last_channel';
 
     /** 规范化服务器输入，允许用户输入 http/ws 前缀但内部只保留 host:port。 */
     function normalizeServerInput(rawValue) {
@@ -212,7 +213,11 @@ export function createRoomConnectionFeature(context) {
         if (context.autoJoinFirstChannelAfterLobby && autoJoinFirstChannel && !context.getRoom()) {
             const availableChannels = getAvailableChannelNames();
             if (availableChannels.length > 0) {
-                await switchChannel(availableChannels[0]);
+                const savedChannel = localStorage.getItem(LAST_CHANNEL_STORAGE_KEY);
+                const targetChannel = savedChannel && availableChannels.includes(savedChannel)
+                    ? savedChannel
+                    : availableChannels[0];
+                await switchChannel(targetChannel);
             }
         }
     }
@@ -270,9 +275,13 @@ export function createRoomConnectionFeature(context) {
             }
 
             currentChannel = roomName;
-            await connectToChannel(roomName, { autoMic: false });
+            const connected = await connectToChannel(roomName, { autoMic: false });
+            if (!connected || !context.getRoom()) {
+                return;
+            }
 
             if (context.getRoom() && currentChannel === roomName) {
+                localStorage.setItem(LAST_CHANNEL_STORAGE_KEY, roomName);
                 try {
                     context.presence.joinChannel(roomName);
                 } catch (error) {
@@ -312,10 +321,38 @@ export function createRoomConnectionFeature(context) {
     /** 连接指定 LiveKit 房间，并启用按钮、设备列表、事件绑定和自动开麦。 */
     async function connectToChannel(targetRoomName, options = {}) {
         const autoMic = options.autoMic !== false;
-        const username = document.getElementById('username').value.trim();
-        if (!username) return;
-        const serverConfig = getServerConfig();
+        const username = document.getElementById('username')?.value?.trim() || '';
+        if (!username) return false;
 
+        const serverConfig = getServerConfig();
+        let nextRoom = null;
+
+        const setText = (id, value) => {
+            const el = document.getElementById(id);
+            if (el) el.innerText = value;
+        };
+
+        const setDisabled = (id, value) => {
+            const el = document.getElementById(id);
+            if (el) el.disabled = value;
+        };
+
+        const setDisplay = (id, value) => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = value;
+        };
+
+        const runNonCritical = async (label, task) => {
+            try {
+                return await task();
+            } catch (error) {
+                logError(`roomConnection/connectToChannel ${label}失败`, error, 'warn');
+                return undefined;
+            }
+        };
+
+        // 只有获取 token 和 LiveKit connect 属于“核心连接失败”。
+        // 连接成功后的设备枚举、输出设备切换、自动开麦失败不能再把用户踢回大厅。
         try {
             const presenceIdentity = context.presence?.getIdentity?.();
             const tokenUrl = `${serverConfig.apiBase}/api/get_token?user=${encodeURIComponent(username)}&room=${encodeURIComponent(targetRoomName)}${
@@ -323,10 +360,12 @@ export function createRoomConnectionFeature(context) {
             }`;
 
             const response = await fetch(tokenUrl);
-            const data = await response.json();
-            const token = data.token;
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.token) {
+                throw new Error(data.error || `Token 接口返回异常：HTTP ${response.status}`);
+            }
 
-            const room = new context.LivekitClient.Room({
+            nextRoom = new context.LivekitClient.Room({
                 adaptiveStream: true,
                 dynacast: true,
                 audioCaptureDefaults: context.rustMic.getMicCaptureOptions(),
@@ -337,53 +376,77 @@ export function createRoomConnectionFeature(context) {
                 },
             });
 
-            context.setRoom(room);
-            context.livekitEvents.registerRoomEvents(room);
-
-            await room.connect(serverConfig.livekitWs, token);
-            document.getElementById('header').innerText = `# 🔊 ${targetRoomName} 语音分组`;
-            document.getElementById('ui-username').innerText = username;
-            document.getElementById('ui-status').innerText = '已连接: ' + targetRoomName;
-            document.getElementById('ui-status').style.color = '#23a559';
-
-            document.getElementById('username').disabled = true;
-            document.getElementById('btn-mic').disabled = false;
-            document.getElementById('mic-select').disabled = false;
-            document.getElementById('audio-output-select').disabled = false;
-            document.getElementById('btn-screen').disabled = false;
-            context.rustMic.updateMicSourceButton();
-            document.getElementById('screen-res').disabled = false;
-            document.getElementById('screen-fps').disabled = false;
-            document.getElementById('screen-bitrate').disabled = false;
-            document.getElementById('btn-app-audio').disabled = false;
-            document.getElementById('btn-leave').style.display = 'flex';
-
-            await context.updateMicList();
+            context.livekitEvents.registerRoomEvents(nextRoom);
+            await nextRoom.connect(serverConfig.livekitWs, data.token);
+            context.setRoom(nextRoom);
+        } catch (error) {
+            logError('roomConnection/connectToChannel LiveKit 核心连接失败', error);
+            alertError('连接频道失败', error, '请检查 LiveKit 服务、Token 服务或网络连接。');
 
             try {
-                if (autoMic && !context.rustMic.getIsMicOn()) {
-                    await context.updateMicList().catch((error) => logError('roomConnection/connectToChannel 自动开麦前刷新设备列表失败', error, 'warn'));
-                    await context.rustMic.toggleMic();
-                }
-            } catch (e) {
-                logError('roomConnection/connectToChannel 自动开麦失败', e, 'warn');
-            }
+                await nextRoom?.disconnect?.();
+            } catch (_) {}
 
-            document.getElementById('chat-input').disabled = false;
-            document.getElementById('btn-send').disabled = false;
-
-            context.participants.updateParticipantList();
-            await context.updateAudioOutputList();
-            await context.switchAudioOutput(document.getElementById('audio-output-select').value || context.getSelectedAudioOutputId());
-            context.appAudio.updateAppAudioButtons();
-        } catch (error) {
-            logError('roomConnection/connectToChannel 频道连接失败', error);
-            alertError('连接频道失败', error, '请检查 LiveKit 服务、Token 服务或网络连接。');
             currentChannel = null;
             context.setRoom(null);
-            document.getElementById('header').innerText = '# 🏛️ DoNiChannel 电竞大厅（连接失败，请重试）';
+            setText('header', '# 🏛️ DoNiChannel 电竞大厅（连接失败，请重试）');
+            return false;
         }
+
+        setText('header', `# 🔊 ${targetRoomName} 语音分组`);
+        setText('ui-username', username);
+        setText('ui-status', '已连接: ' + targetRoomName);
+        const uiStatus = document.getElementById('ui-status');
+        if (uiStatus) uiStatus.style.color = '#23a559';
+
+        setDisabled('username', true);
+        setDisabled('btn-mic', false);
+        setDisabled('mic-select', false);
+        setDisabled('audio-output-select', false);
+        setDisabled('btn-screen', false);
+        setDisabled('screen-res', false);
+        setDisabled('screen-fps', false);
+        setDisabled('screen-bitrate', false);
+        setDisabled('btn-app-audio', false);
+        setDisabled('chat-input', false);
+        setDisabled('btn-send', false);
+        setDisplay('btn-leave', 'flex');
+
+        await runNonCritical('更新麦克风源按钮', async () => {
+            context.rustMic.updateMicSourceButton();
+        });
+
+        await runNonCritical('刷新麦克风设备列表', async () => {
+            await context.updateMicList();
+        });
+
+        if (autoMic && !context.rustMic.getIsMicOn()) {
+            await runNonCritical('自动开麦', async () => {
+                await context.updateMicList();
+                await context.rustMic.toggleMic();
+            });
+        }
+
+        await runNonCritical('刷新成员列表', async () => {
+            context.participants.updateParticipantList();
+        });
+
+        await runNonCritical('刷新扬声器设备列表', async () => {
+            await context.updateAudioOutputList();
+        });
+
+        await runNonCritical('切换输出设备', async () => {
+            const outputSelect = document.getElementById('audio-output-select');
+            await context.switchAudioOutput(outputSelect?.value || context.getSelectedAudioOutputId());
+        });
+
+        await runNonCritical('刷新应用音频按钮', async () => {
+            context.appAudio.updateAppAudioButtons();
+        });
+
+        return true;
     }
+
 
     /** 主动离开房间；释放麦克风、应用音频、屏幕共享和远端音频资源。 */
     async function leaveRoom() {
