@@ -46,7 +46,6 @@ ui/dist/
 
 # 根目录 package-lock.json 多半是误生成的
 # 注意：这只忽略根目录的 package-lock.json，不影响 ui/package-lock.json
-/package-lock.json
 
 # 前端锁文件建议提交，确保别人 npm install 版本一致
 !ui/package-lock.json

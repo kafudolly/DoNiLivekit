@@ -4,8 +4,8 @@
   "version": "0.1.0",
 "identifier": "com.r.donichannel",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run frontend:dev",
+    "beforeBuildCommand": "npm run frontend:build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../ui/dist"
   },

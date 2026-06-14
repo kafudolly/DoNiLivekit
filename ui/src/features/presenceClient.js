@@ -48,7 +48,10 @@ export function createPresenceClient({ logError, onMessage }) {
     async function connect({ apiBase, username }) {
         const cleanName = String(username || '访客').trim() || '访客';
 
-        if (socket && socket.readyState === WebSocket.OPEN) {
+        if (
+            socket &&
+            (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+        ) {
             return;
         }
 

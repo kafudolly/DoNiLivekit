@@ -271,42 +271,70 @@ class PresenceManager:
 
     async def connect(self, websocket: WebSocket, identity: str, display_name: str) -> None:
         """
-        注册一个 Presence WebSocket 连接。
+        注册 Presence WebSocket 连接。
 
-        连接成功后立刻发送完整快照，并向其他客户端广播用户进入大厅。
+        同一个 identity 可能因为刷新、重连、切频道过程中的重复调用而再次连接。
+        新连接应该替换旧连接，但旧连接后续断开时不能误删新连接。
         """
         await websocket.accept()
 
+        old_websocket = None
+        was_online = False
+        old_channel = None
+
         async with self.lock:
+            old_websocket = self.active_connections.get(identity)
+            old_participant = self.participants.get(identity)
+
+            if old_participant:
+                was_online = True
+                old_channel = old_participant.current_channel
+
             self.active_connections[identity] = websocket
             self.participants[identity] = PresenceParticipant(
                 identity=identity,
                 display_name=display_name,
-                current_channel=None,
+                current_channel=old_channel,
             )
 
-        await self.send_to(identity, self.build_snapshot())
+        if old_websocket and old_websocket is not websocket:
+            try:
+                await old_websocket.close(code=4000)
+            except Exception:
+                pass
 
-        await self.broadcast(
-            {
-                "type": "participant_online",
-                "participant": {
-                    "identity": identity,
-                    "displayName": display_name,
-                    "currentChannel": None,
-                },
-            },
-            exclude_identity=identity,
+        await websocket.send_text(
+            json.dumps(self.build_snapshot(), ensure_ascii=False)
         )
 
-    async def disconnect(self, identity: str) -> None:
-        """
-        注销一个 Presence 连接。
+        if not was_online:
+            await self.broadcast(
+                {
+                    "type": "participant_online",
+                    "participant": {
+                        "identity": identity,
+                        "displayName": display_name,
+                        "currentChannel": None,
+                    },
+                },
+                exclude_identity=identity,
+            )
 
-        用户关闭窗口、断网、刷新页面时都会走这里。
-        必须把用户从频道成员中清掉，避免频道下面残留幽灵用户。
+    async def disconnect(self, identity: str, websocket: Optional[WebSocket] = None) -> None:
+        """
+        注销 Presence WebSocket 连接。
+
+        websocket 参数用于判断：当前断开的连接是否仍然是 active_connections 中的有效连接。
+
+        如果旧连接 A 断开，但 active_connections[identity] 已经变成新连接 B，
+        那么这里必须直接 return，不能把 B 删除。
         """
         async with self.lock:
+            current_websocket = self.active_connections.get(identity)
+
+            if websocket is not None and current_websocket is not websocket:
+                return
+
             participant = self.participants.pop(identity, None)
             self.active_connections.pop(identity, None)
 
@@ -374,7 +402,8 @@ class PresenceManager:
         """
         向所有在线 Presence 客户端广播消息。
 
-        exclude_identity 用于避免把某些事件重复发给事件发起者。
+        发送失败时，需要带上失败的 websocket 一起清理。
+        这样可以避免旧连接发送失败后误删同 identity 的新连接。
         """
         message = json.dumps(payload, ensure_ascii=False)
 
@@ -387,10 +416,10 @@ class PresenceManager:
             try:
                 await websocket.send_text(message)
             except Exception:
-                dead_connections.append(identity)
+                dead_connections.append((identity, websocket))
 
-        for identity in dead_connections:
-            await self.disconnect(identity)
+        for identity, websocket in dead_connections:
+            await self.disconnect(identity, websocket)
 
 
 presence_manager = PresenceManager()
@@ -576,11 +605,11 @@ async def presence_websocket(websocket: WebSocket):
                 )
 
     except WebSocketDisconnect:
-        await presence_manager.disconnect(identity)
+        await presence_manager.disconnect(identity, websocket)
 
     except Exception as error:
         print(f"[presence] WebSocket 异常: identity={identity}, error={error}")
-        await presence_manager.disconnect(identity)
+        await presence_manager.disconnect(identity, websocket)
 
 
 # ============================================================
