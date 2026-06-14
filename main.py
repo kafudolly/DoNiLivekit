@@ -607,10 +607,21 @@ async def presence_websocket(websocket: WebSocket):
     except WebSocketDisconnect:
         await presence_manager.disconnect(identity, websocket)
 
+    except RuntimeError as error:
+        error_text = str(error)
+
+        # 用户主动退出大厅、刷新页面、关闭窗口时，WebSocket 可能已经进入关闭状态。
+        # 这属于正常断开流程，不需要按异常打印。
+        if 'WebSocket is not connected' in error_text:
+            await presence_manager.disconnect(identity, websocket)
+            return
+
+        print(f"[presence] WebSocket 运行时异常: identity={identity}, error={error}")
+        await presence_manager.disconnect(identity, websocket)
+
     except Exception as error:
         print(f"[presence] WebSocket 异常: identity={identity}, error={error}")
         await presence_manager.disconnect(identity, websocket)
-
 
 # ============================================================
 # 静态资源兜底

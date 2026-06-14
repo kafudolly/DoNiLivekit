@@ -7,6 +7,7 @@ import ControlDock from '../controls/ControlDock.vue';
 defineEmits([
   'join-room',
   'create-channel',
+  'switch-channel',
   'switch-mic',
   'switch-output',
   'toggle-mic',
@@ -30,7 +31,7 @@ defineEmits([
       <div class="sidebar-title" style="margin: 0;">🔊 语音分组</div>
       <button class="tiny-btn" title="创建频道" @click="$emit('create-channel')">+</button>
     </div>
-    <ChannelList />
+    <ChannelList @switch-channel="$emit('switch-channel', $event)" />
 
     <div class="sidebar-title" style="margin-top: 10px;">👥 在线成员 (<span id="user-count">0</span>)</div>
     <ParticipantList />

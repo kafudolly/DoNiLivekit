@@ -8,6 +8,7 @@ import {
   initLegacyDom,
   joinRoom,
   createChannel,
+  switchChannel,
   switchMic,
   switchAudioOutput,
   toggleMic,
@@ -32,6 +33,7 @@ onMounted(async () => {
   <SidebarPanel
     @join-room="joinRoom"
     @create-channel="createChannel"
+    @switch-channel="switchChannel"
     @switch-mic="switchMic"
     @switch-output="switchAudioOutput"
     @toggle-mic="toggleMic"

@@ -49,8 +49,7 @@ let roomConnectionFeature;
 
 const presenceClient = createPresenceClient({
     logError,
-    onMessage: (message) => {
-        roomConnectionFeature?.applyPresenceMessage?.(message);
+    onMessage: () => {
         requestStoreSync();
     },
 });
@@ -445,6 +444,12 @@ export {
     getRuntimeSnapshot,
     joinRoom,
     createChannel,
+    switchChannel,
+    connectToChannel,
+    renderChannelList,
+    refreshRoomsFromServer,
+    startRoomPolling,
+    stopRoomPolling,
     switchMic,
     switchAudioOutput,
     toggleMic,

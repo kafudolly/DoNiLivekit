@@ -1,11 +1,11 @@
 import { alertError, logError } from '../shared/errors.js';
+import { presenceStore } from '../stores/presenceStore.js';
 
-/** 创建房间连接模块；维护大厅、频道列表、当前频道和切频道状态。 */
+/** 创建房间连接模块；维护大厅状态、当前频道和 LiveKit 切频道流程。 */
 export function createRoomConnectionFeature(context) {
     let currentChannel = null;
     let isInLobby = false;
     let channels = ['day0', 'day1', 'day2'];
-    const channelParticipants = {};
     let roomPollTimer = null;
     let isPolling = false;
     let shouldRestoreMicAfterChannelSwitch = false;
@@ -39,163 +39,68 @@ export function createRoomConnectionFeature(context) {
         return { apiBase, livekitWs, persistValue: `${host}:${apiPort}` };
     }
 
-    /** 渲染频道列表；onclick 保留为兼容入口，实际调用 runtime.switchChannel。 */
-    function renderChannelList() {
-        const list = document.getElementById('channel-list');
-        if (!list) return;
+    /** 从 Presence 状态中读取频道名；Presence 未连接前回退到本地默认频道。 */
+    function getAvailableChannelNames() {
+        const presenceChannels = presenceStore.channels
+            .map((channel) => String(channel.name || channel.id || '').trim())
+            .filter(Boolean);
 
-        list.innerHTML = channels.map(name => {
-            const active = currentChannel === name ? 'active' : '';
-            const escapedName = name.replace(/'/g, "\\'");
-            const participants = Array.isArray(channelParticipants[name]) ? channelParticipants[name] : [];
-            const participantsHTML = participants.length > 0
-                ? participants.map(p => context.sanitizeText(p)).join('、')
-                : '暂无在线成员';
-            const participantsClass = participants.length > 0 ? 'channel-participants' : 'channel-participants empty';
-            return `
-                <div class="channel-row">
-                    <button class="channel-item ${active}" onclick="switchChannel('${escapedName}')"># ${context.sanitizeText(name)}</button>
-                    <div class="${participantsClass}">${participantsHTML}</div>
-                </div>
-            `;
-        }).join('');
+        return presenceChannels.length > 0 ? presenceChannels : channels;
     }
 
-        /** 从 Presence 成员对象中提取显示名。 */
-    function getPresenceMemberName(member) {
-        if (!member) return '';
-        if (typeof member === 'string') return member;
-        return String(member.displayName || member.name || member.identity || '').trim();
-    }
+    /** 更新本地频道缓存；只保存频道名，不保存成员。成员唯一来源是 presenceStore。 */
+    function setLocalChannels(nextChannels) {
+        const seen = new Set();
+        const normalized = [];
 
-    /** 使用 Presence 快照重建频道列表和频道成员。 */
-    function applyPresenceSnapshot(message) {
-        if (!message || !Array.isArray(message.channels)) return;
-
-        const nextChannels = [];
-        const nextParticipants = {};
-
-        message.channels.forEach((channel) => {
-            const roomName = String(channel.name || channel.id || '').trim();
-            if (!roomName) return;
-
-            nextChannels.push(roomName);
-
-            const members = Array.isArray(channel.members) ? channel.members : [];
-            nextParticipants[roomName] = members
-                .map(getPresenceMemberName)
-                .filter(Boolean);
+        nextChannels.forEach((name) => {
+            const cleanName = String(name || '').trim();
+            if (!cleanName || seen.has(cleanName)) return;
+            seen.add(cleanName);
+            normalized.push(cleanName);
         });
 
-        if (nextChannels.length > 0) {
-            channels = nextChannels;
-        }
-
-        Object.keys(channelParticipants).forEach((key) => delete channelParticipants[key]);
-        Object.keys(nextParticipants).forEach((key) => {
-            channelParticipants[key] = nextParticipants[key];
-        });
-
-        renderChannelList();
-    }
-
-    /** 处理 Presence 增量事件，避免继续依赖 /api/rooms 轮询。 */
-    function applyPresenceMessage(message) {
-        if (!message || !message.type) return;
-
-        if (message.type === 'presence_snapshot') {
-            applyPresenceSnapshot(message);
-            return;
-        }
-
-        if (message.type === 'participant_moved') {
-            const displayName = String(message.displayName || message.identity || '').trim();
-            const from = message.from;
-            const to = message.to;
-
-            if (displayName && from && Array.isArray(channelParticipants[from])) {
-                channelParticipants[from] = channelParticipants[from].filter((name) => name !== displayName);
-            }
-
-            if (displayName && to) {
-                if (!channels.includes(to)) channels.push(to);
-                if (!Array.isArray(channelParticipants[to])) channelParticipants[to] = [];
-                if (!channelParticipants[to].includes(displayName)) {
-                    channelParticipants[to].push(displayName);
-                }
-            }
-
-            renderChannelList();
-            return;
-        }
-
-        if (message.type === 'participant_offline') {
-            const displayName = String(message.displayName || message.identity || '').trim();
-
-            if (displayName) {
-                Object.keys(channelParticipants).forEach((roomName) => {
-                    if (Array.isArray(channelParticipants[roomName])) {
-                        channelParticipants[roomName] = channelParticipants[roomName].filter((name) => name !== displayName);
-                    }
-                });
-            }
-
-            renderChannelList();
-            return;
-        }
-
-        if (message.type === 'participant_online') {
-            // 进入大厅但还没加入语音频道，不显示在频道下面。
-            return;
+        if (normalized.length > 0) {
+            channels = normalized;
         }
     }
 
-    /** 从后端 /api/rooms 拉取频道和在线成员，用于大厅轮询。 */
+    /**
+     * 兼容旧调用的空渲染函数。
+     *
+     * 频道列表现在由 ChannelList.vue 直接读取 presenceStore 渲染，
+     * 这里保留函数名，避免旧初始化和错误恢复流程调用时报错。
+     */
+    function renderChannelList() {}
+
+    /**
+     * 兼容旧接口：只从 /api/rooms 拉取频道列表，不再读取或维护成员。
+     *
+     * 成员状态已经迁移到 Presence WebSocket 和 presenceStore。
+     */
     async function refreshRoomsFromServer() {
         const serverConfig = getServerConfig();
         const response = await fetch(`${serverConfig.apiBase}/api/rooms`);
         if (!response.ok) throw new Error(`房间列表接口返回异常：HTTP ${response.status}`);
+
         const rows = await response.json();
-        if (!Array.isArray(rows)) return;
+        if (!Array.isArray(rows)) return getAvailableChannelNames();
 
-        const nextChannels = [];
-        const nextParticipants = {};
-        rows.forEach((row) => {
-            const roomName = (row && row.name ? String(row.name) : '').trim();
-            if (!roomName) return;
-            nextChannels.push(roomName);
-            nextParticipants[roomName] = Array.isArray(row.participants) ? row.participants : [];
-        });
+        const nextChannels = rows
+            .map((row) => (row && row.name ? String(row.name).trim() : ''))
+            .filter(Boolean);
 
-        if (nextChannels.length > 0) channels = nextChannels;
-
-        Object.keys(channelParticipants).forEach((key) => delete channelParticipants[key]);
-        Object.keys(nextParticipants).forEach((key) => {
-            channelParticipants[key] = nextParticipants[key];
-        });
-
-        renderChannelList();
+        setLocalChannels(nextChannels);
+        return getAvailableChannelNames();
     }
 
-    /** 房间轮询主循环；每轮请求完成后再安排下一轮，避免请求堆积。 */
-    async function pollRooms() {
-        if (!isInLobby || !isPolling) return;
-
-        try {
-            await refreshRoomsFromServer();
-        } catch (err) {
-            logError('roomConnection/pollRooms 房间轮询失败，将在下一轮重试', err, 'warn');
-        } finally {
-            if (isPolling) {
-                roomPollTimer = setTimeout(pollRooms, 3000);
-            }
-        }
-    }
-
+    /** Presence 已接管实时成员状态，保留轮询函数用于兼容旧导出但不再启动定时器。 */
     function startRoomPolling() {
-        if (isPolling) return;
-        isPolling = true;
-        pollRooms();
+        isPolling = false;
+        if (roomPollTimer) {
+            clearTimeout(roomPollTimer);
+            roomPollTimer = null;
+        }
     }
 
     function stopRoomPolling() {
@@ -206,7 +111,7 @@ export function createRoomConnectionFeature(context) {
         }
     }
 
-    /** 调用后端创建频道，成功后刷新列表并切入新频道。 */
+    /** 调用后端创建频道，成功后等待 Presence snapshot 刷新 Vue 频道列表，并切入新频道。 */
     async function createChannel() {
         const value = prompt('输入新频道名（英文字母/数字/短横线）:');
         if (!value) return;
@@ -218,6 +123,7 @@ export function createRoomConnectionFeature(context) {
             action: 'create_channel',
             name,
         };
+
         try {
             const response = await fetch(`${serverConfig.apiBase}/api/rooms`, {
                 method: 'POST',
@@ -228,12 +134,8 @@ export function createRoomConnectionFeature(context) {
             if (!response.ok) {
                 throw new Error(data.error || `创建频道接口返回异常：HTTP ${response.status}`);
             }
-            if (!channels.includes(name)) {
-                channels.push(name);
-                channelParticipants[name] = [];
-                renderChannelList();
-            }
 
+            setLocalChannels([...channels, name]);
             context.presence.requestSnapshot?.();
             await switchChannel(name);
         } catch (e) {
@@ -279,7 +181,7 @@ export function createRoomConnectionFeature(context) {
         context.appAudio.closeAppAudioModal();
     }
 
-    /** 进入大厅：保存用户名/服务器地址，启动频道轮询，并按配置自动加入第一个频道。 */
+    /** 进入大厅：保存用户名/服务器地址，连接 Presence，并按配置自动加入第一个频道。 */
     async function joinRoom(options = {}) {
         const autoJoinFirstChannel = options.autoJoinFirstChannel !== false;
         const username = document.getElementById('username').value.trim();
@@ -307,10 +209,11 @@ export function createRoomConnectionFeature(context) {
             logError('roomConnection/joinRoom 连接 Presence WebSocket 失败', err, 'warn');
         }
 
-        renderChannelList();
-
-        if (context.autoJoinFirstChannelAfterLobby && autoJoinFirstChannel && !context.getRoom() && Array.isArray(channels) && channels.length > 0) {
-            await switchChannel(channels[0]);
+        if (context.autoJoinFirstChannelAfterLobby && autoJoinFirstChannel && !context.getRoom()) {
+            const availableChannels = getAvailableChannelNames();
+            if (availableChannels.length > 0) {
+                await switchChannel(availableChannels[0]);
+            }
         }
     }
 
@@ -367,8 +270,6 @@ export function createRoomConnectionFeature(context) {
             }
 
             currentChannel = roomName;
-            renderChannelList();
-
             await connectToChannel(roomName, { autoMic: false });
 
             if (context.getRoom() && currentChannel === roomName) {
@@ -480,7 +381,6 @@ export function createRoomConnectionFeature(context) {
             alertError('连接频道失败', error, '请检查 LiveKit 服务、Token 服务或网络连接。');
             currentChannel = null;
             context.setRoom(null);
-            renderChannelList();
             document.getElementById('header').innerText = '# 🏛️ DoNiChannel 电竞大厅（连接失败，请重试）';
         }
     }
@@ -516,7 +416,6 @@ export function createRoomConnectionFeature(context) {
         normalizeServerInput,
         getServerConfig,
         renderChannelList,
-        applyPresenceMessage,
         refreshRoomsFromServer,
         startRoomPolling,
         stopRoomPolling,
@@ -527,7 +426,7 @@ export function createRoomConnectionFeature(context) {
         connectToChannel,
         leaveRoom,
         getCurrentChannel: () => currentChannel,
-        getChannels: () => channels,
+        getChannels: () => getAvailableChannelNames(),
         getIsInLobby: () => isInLobby,
     };
 }
