@@ -81,7 +81,9 @@ function chooseTheme(themeId) {
           </div>
 
           <div class="settings-page-stack">
-            <ProfileSettingsPanel v-show="activeTab === 'profile'" />
+            <div v-show="activeTab === 'profile'" class="settings-tab-panel profile-tab-panel">
+              <ProfileSettingsPanel />
+            </div>
 
             <section v-show="activeTab === 'devices'" class="settings-section settings-page-section">
               <div class="settings-section-title">输入 / 输出设备</div>
