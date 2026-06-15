@@ -157,7 +157,7 @@ export async function saveUserProfile(profile) {
  * @param {File} file - 图片文件
  * @returns {Promise<{ ok: boolean, url: string }>}
  */
-export async function uploadAvatar(file) {
+export async function uploadAvatar(file, { userId } = {}) {
   const base = getApiBase();
   if (!base) {
     throw new Error('[apiClient] apiBase 未设置，请先调用 setApiBase()');
@@ -165,6 +165,7 @@ export async function uploadAvatar(file) {
 
   const formData = new FormData();
   formData.append('file', file);
+  if (userId) formData.append('userId', userId);
 
   const url = `${base}/api/upload/avatar`;
   const res = await fetch(url, {
@@ -179,6 +180,17 @@ export async function uploadAvatar(file) {
   }
 
   return res.json();
+}
+
+/**
+ * 查询某个用户的头像历史。
+ * @param {string} userId
+ * @returns {Promise<{ ok: boolean, userId: string, items: Array }>}
+ */
+export async function fetchAvatarHistory(userId, { limit = 12 } = {}) {
+  const key = encodeURIComponent(userId || '');
+  if (!key) return { ok: false, items: [] };
+  return apiFetch(`/api/user/avatar-history?userId=${key}&limit=${limit}`);
 }
 
 // ─── 安全封装（不抛出，只打日志） ─────────────────────────────────────────────

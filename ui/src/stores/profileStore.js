@@ -1,20 +1,20 @@
 import { reactive } from 'vue';
-import { uploadAvatar, saveUserProfile, fetchUserProfile } from '../shared/apiClient.js';
+import { uploadAvatar, saveUserProfile, fetchUserProfile, fetchAvatarHistory } from '../shared/apiClient.js';
 
 const PROFILE_STORAGE_KEY = 'donichannel_profile_v1';
 const CONNECTION_STORAGE_KEY = 'donichannel_connection_id_v1';
 
-// 头像图片限制（压缩到 128×128，base64 不超过约 80KB）
-const AVATAR_MAX_PX = 128;
-const AVATAR_MAX_BYTES = 80 * 1024;
+// 头像上传：前端裁剪组件会把非 GIF 图片裁剪为 512×512 WebP 后上传。
+// GIF 为了保留动图，当前保留原文件上传。
 
 const DEFAULT_PROFILE = {
   userId: '',
   displayName: '',
   avatarColor: '#5865f2',
   avatarPreset: '🎮',
-  avatarUrl: null,   // base64 data URL，优先级高于 avatarColor+avatarPreset
+  avatarUrl: null,   // 服务端 /uploads/... URL，优先级高于 avatarColor+avatarPreset
   statusText: '在线',
+  avatarHistory: [],
 };
 
 const AVATAR_COLORS = [
@@ -239,14 +239,36 @@ export function updateAvatarUrl(value) {
 }
 
 
+export async function loadAvatarHistory() {
+  if (!profileStore.userId) return [];
+  try {
+    const res = await fetchAvatarHistory(profileStore.userId, { limit: 12 });
+    const items = Array.isArray(res?.items) ? res.items : [];
+    profileStore.avatarHistory = items;
+    return items;
+  } catch (error) {
+    console.warn('[ProfileStore] 拉取头像历史失败', error);
+    profileStore.avatarHistory = [];
+    return [];
+  }
+}
+
+export function selectAvatarHistory(avatarUrl) {
+  if (!avatarUrl) return;
+  updateAvatarUrl(avatarUrl);
+  scheduleProfileSync(0);
+}
+
 export async function uploadAvatarImage(file) {
   if (!file || !file.type.startsWith('image/')) return null;
 
   try {
-    const res = await uploadAvatar(file);
-    if (res.ok && res.url) {
-      updateAvatarUrl(res.url);
-      return res.url;
+    const res = await uploadAvatar(file, { userId: profileStore.userId });
+    const url = res?.url || res?.avatarUrl;
+    if (res?.ok && url) {
+      updateAvatarUrl(url);
+      await loadAvatarHistory();
+      return url;
     }
   } catch (error) {
     console.error('[ProfileStore] 上传头像失败', error);

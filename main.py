@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -34,7 +35,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body, Query, UploadFile, File, Header
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body, Query, UploadFile, File, Header, Form
 from livekit.api import (
     LiveKitAPI,
     AccessToken,
@@ -78,9 +79,10 @@ DEFAULT_ROOM_NAME = "team-meeting-room"
 CHAT_MAX_MESSAGES_PER_CHANNEL = 500
 
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
-MAX_AVATAR_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_AVATAR_UPLOAD_BYTES = 10 * 1024 * 1024
 ALLOWED_AVATAR_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 ALLOWED_AVATAR_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
+AVATAR_HISTORY_LIMIT_PER_USER = 12
 # 设置 DONICHANNEL_ADMIN_TOKEN 后，清空全部聊天记录必须带 X-Admin-Token 或 adminToken。
 CHAT_ADMIN_TOKEN = os.environ.get("DONICHANNEL_ADMIN_TOKEN", "").strip()
 
@@ -189,6 +191,24 @@ def init_db() -> None:
                 updated_at   INTEGER NOT NULL DEFAULT 0
             )
             """
+        )
+
+        # 用户头像历史表：按 userId 保存最近头像记录，便于在客户端回选历史头像。
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_avatar_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                avatar_url TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                content_type TEXT NOT NULL DEFAULT '',
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_avatar_history_user_created ON user_avatar_history (user_id, created_at DESC)"
         )
 
         # 兼容旧 rooms.db：CREATE TABLE IF NOT EXISTS 不会自动补字段。
@@ -1325,6 +1345,106 @@ async def post_reaction(body: dict = Body(default_factory=dict)):
     return JSONResponse({"ok": True, "action": action, "reactions": reactions, "realtime": "chat_ws_required"})
 
 
+
+def _safe_avatar_user_dir(user_id: str) -> str:
+    """把 userId 转成安全目录名，保证每个用户的头像文件放在独立子目录。"""
+    value = re.sub(r"[^a-zA-Z0-9_-]", "_", str(user_id or "anonymous")).strip("_")
+    return (value or "anonymous")[:80]
+
+
+def _avatar_file_path_from_url(avatar_url: str) -> Optional[str]:
+    """只允许删除 /uploads/avatars/... 下的头像文件，避免误删其他路径。"""
+    url = str(avatar_url or "")
+    prefix = "/uploads/avatars/"
+    if not url.startswith(prefix):
+        return None
+    rel = url[len("/uploads/"):]
+    path = os.path.abspath(os.path.join(UPLOADS_DIR, rel))
+    uploads_abs = os.path.abspath(UPLOADS_DIR)
+    if not path.startswith(uploads_abs):
+        return None
+    return path
+
+
+def db_add_avatar_history(user_id: str, avatar_url: str, filename: str, content_type: str, size_bytes: int) -> None:
+    """记录用户头像历史，并按用户保留最近 N 个头像文件。"""
+    user_id = str(user_id or "").strip()
+    if not user_id or not avatar_url:
+        return
+
+    conn = get_db_conn()
+    stale_rows = []
+    try:
+        now_ms = int(time.time() * 1000)
+        conn.execute(
+            """
+            INSERT INTO user_avatar_history
+                (user_id, avatar_url, filename, content_type, size_bytes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, avatar_url, filename, content_type or "", int(size_bytes or 0), now_ms),
+        )
+
+        stale_rows = conn.execute(
+            """
+            SELECT id, avatar_url FROM user_avatar_history
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT -1 OFFSET ?
+            """,
+            (user_id, AVATAR_HISTORY_LIMIT_PER_USER),
+        ).fetchall()
+
+        if stale_rows:
+            ids = [int(row["id"]) for row in stale_rows]
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(f"DELETE FROM user_avatar_history WHERE id IN ({placeholders})", ids)
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 数据库提交后再删磁盘旧文件；失败不影响主流程。
+    for row in stale_rows:
+        path = _avatar_file_path_from_url(row["avatar_url"])
+        if not path:
+            continue
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+
+def db_get_avatar_history(user_id: str, limit: int = AVATAR_HISTORY_LIMIT_PER_USER) -> List[dict]:
+    user_id = str(user_id or "").strip()
+    if not user_id:
+        return []
+    limit = max(1, min(int(limit or AVATAR_HISTORY_LIMIT_PER_USER), AVATAR_HISTORY_LIMIT_PER_USER))
+    conn = get_db_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT avatar_url, filename, content_type, size_bytes, created_at
+            FROM user_avatar_history
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [
+            {
+                "avatarUrl": row["avatar_url"],
+                "filename": row["filename"],
+                "contentType": row["content_type"],
+                "sizeBytes": row["size_bytes"],
+                "createdAt": row["created_at"],
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
 @app.get("/api/user/profile")
 async def get_user_profile(
     userId: Optional[str] = Query(None),
@@ -1369,9 +1489,22 @@ async def save_user_profile(body: dict = Body(default_factory=dict)):
     return JSONResponse({"ok": True, "profile": profile})
 
 
+@app.get("/api/user/avatar-history")
+async def get_user_avatar_history(userId: str = Query(...), limit: int = Query(12)):
+    """查询某个用户最近上传过的头像。"""
+    user_id = str(userId or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="userId 不能为空")
+    return JSONResponse({"ok": True, "userId": user_id, "items": db_get_avatar_history(user_id, limit)})
+
+
 @app.post("/api/upload/avatar")
-async def upload_avatar(file: UploadFile = File(...)):
-    """上传自定义头像，返回可访问的 URL。"""
+async def upload_avatar(file: UploadFile = File(...), userId: Optional[str] = Form(None)):
+    """上传自定义头像，返回可访问的 URL。
+
+    前端会优先上传已经裁剪/压缩后的头像；GIF 为了保留动图，允许原样上传。
+    若传入 userId，则头像文件会放在 uploads/avatars/<userId>/ 下，并写入该用户的头像历史。
+    """
     content_type = (file.content_type or "").lower().split(";")[0].strip()
     if content_type not in ALLOWED_AVATAR_MIME_TYPES:
         raise HTTPException(status_code=400, detail="只允许上传 png/jpg/jpeg/webp/gif 图片")
@@ -1389,20 +1522,42 @@ async def upload_avatar(file: UploadFile = File(...)):
 
     content = await file.read(MAX_AVATAR_UPLOAD_BYTES + 1)
     if len(content) > MAX_AVATAR_UPLOAD_BYTES:
-        raise HTTPException(status_code=400, detail="图片不能超过 5MB")
+        raise HTTPException(status_code=400, detail="图片不能超过 10MB")
     if not content:
         raise HTTPException(status_code=400, detail="上传文件为空")
 
-    filename = f"{uuid.uuid4().hex}.{ext}"
-    filepath = os.path.abspath(os.path.join(UPLOADS_DIR, filename))
+    safe_user = _safe_avatar_user_dir(userId or "anonymous")
+    avatar_dir = os.path.abspath(os.path.join(UPLOADS_DIR, "avatars", safe_user))
     uploads_abs = os.path.abspath(UPLOADS_DIR)
-    if not filepath.startswith(uploads_abs):
+    if not avatar_dir.startswith(uploads_abs):
+        raise HTTPException(status_code=400, detail="非法上传目录")
+    os.makedirs(avatar_dir, exist_ok=True)
+
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.abspath(os.path.join(avatar_dir, filename))
+    if not filepath.startswith(avatar_dir):
         raise HTTPException(status_code=400, detail="非法文件路径")
 
     with open(filepath, "wb") as f:
         f.write(content)
 
-    return {"ok": True, "url": f"/uploads/{filename}"}
+    avatar_url = f"/uploads/avatars/{safe_user}/{filename}"
+    if userId:
+        db_add_avatar_history(
+            str(userId).strip(),
+            avatar_url,
+            filename,
+            content_type,
+            len(content),
+        )
+
+    return {
+        "ok": True,
+        "url": avatar_url,
+        "avatarUrl": avatar_url,
+        "sizeBytes": len(content),
+        "contentType": content_type,
+    }
 
 
 # ============================================================
