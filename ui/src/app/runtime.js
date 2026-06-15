@@ -8,9 +8,9 @@ import {
 import { sanitizeText } from '../shared/text.js';
 import { logError } from '../shared/errors.js';
 import { appStore, markAppBooted, syncFromRuntimeSnapshot, setLastError } from '../stores/appStore.js';
-import { profileStore } from '../stores/profileStore.js';
+import { profileStore, getConnectionId, syncProfileToServer } from '../stores/profileStore.js';
 import { watch } from 'vue';
-import { switchChatChannel, loadServerHistory, applyServerChatMessage, applyServerReactionUpdate, updateChatAvatars } from '../stores/chatStore.js';
+import { chatStore, switchChatChannel, loadServerHistory, addChatMessage, markMessageSent, markMessageFailed, applyServerChatMessage, applyServerReactionUpdate, updateChatAvatars } from '../stores/chatStore.js';
 import { setApiBase } from '../shared/apiClient.js';
 import {
     updateMicList as updateMicListFromModule,
@@ -35,6 +35,7 @@ import { createLivekitEventsFeature } from '../features/livekitEvents.js';
 import { createRustMicFeature } from '../features/rustMic.js';
 import { createRoomConnectionFeature } from '../features/roomConnection.js';
 import { createPresenceClient } from '../features/presenceClient.js';
+import { createChatClient } from '../features/chatClient.js';
 
 // 运行时装配层。
 // 只负责创建 feature、注入依赖、同步 appStore、暴露给 Vue/旧 onclick 的动作。
@@ -58,26 +59,24 @@ const presenceClient = createPresenceClient({
     onMessage: (message) => {
         roomConnectionFeature?.applyPresenceMessage?.(message);
 
-        // 服务器推送的聊天消息广播（其他人发送的）
-        if (message.type === 'chat_message' && message.message) {
-            const selfId = presenceClient.getIdentity?.() || '';
-            applyServerChatMessage(message.message, selfId);
-        }
-
-        // 服务器推送的 reaction 更新
-        if (message.type === 'reaction_update') {
-            applyServerReactionUpdate(message);
-        }
+        // Phase 3：Presence 不再处理聊天消息和 Reaction。
+        // 聊天与 Reaction 的实时同步统一由 Chat WebSocket 处理。
 
         // 有人更新了 profile
         if (message.type === 'profile_updated') {
-            updateChatAvatars(message.identity, message.avatarColor, message.avatarPreset, message.avatarUrl);
+            updateChatAvatars(message.userId || message.identity, message.avatarColor, message.avatarPreset, message.avatarUrl);
+            if (message.identity && message.identity !== message.userId) {
+                updateChatAvatars(message.identity, message.avatarColor, message.avatarPreset, message.avatarUrl);
+            }
         }
 
         // 收到快照时，全量更新在线用户的头像到本地聊天记录缓存
         if (message.type === 'presence_snapshot' && message.participants) {
             for (const p of Object.values(message.participants)) {
-                updateChatAvatars(p.identity, p.avatarColor, p.avatarPreset, p.avatarUrl);
+                updateChatAvatars(p.userId || p.identity, p.avatarColor, p.avatarPreset, p.avatarUrl);
+                if (p.identity && p.identity !== p.userId) {
+                    updateChatAvatars(p.identity, p.avatarColor, p.avatarPreset, p.avatarUrl);
+                }
             }
         }
 
@@ -85,14 +84,134 @@ const presenceClient = createPresenceClient({
     },
 });
 
-watch(
-    () => [profileStore.avatarColor, profileStore.avatarPreset, profileStore.avatarUrl],
-    ([avatarColor, avatarPreset, avatarUrl]) => {
-        if (presenceClient.isConnected()) {
-            presenceClient.updateProfile({ avatarColor, avatarPreset, avatarUrl });
+
+
+const chatClient = createChatClient({
+    logError,
+    onMessage: (message) => {
+        console.log('[Chat WS]', message.type, message);
+
+        if (message.type === 'message_ack') {
+            if (message.status === 'ok') {
+                markMessageSent({
+                    clientMessageId: message.clientMessageId,
+                    serverMessageId: message.serverMessageId,
+                    messageId: message.messageId,
+                });
+            } else if (message.clientMessageId) {
+                markMessageFailed(message.clientMessageId);
+                logError('runtime/chatClient message_ack 发送失败: ' + (message.message || ''), null, 'warn');
+            }
         }
-        // 当自己更新资料时，也需要同步更新本地聊天记录中的自己发送的消息头像
-        updateChatAvatars(presenceClient.getIdentity?.() || profileStore.userId, avatarColor, avatarPreset, avatarUrl);
+
+        if (message.type === 'message_created' && message.message) {
+            applyServerChatMessage(message.message, chatClient.getUserId?.() || profileStore.userId);
+        }
+
+        if (message.type === 'reaction_updated') {
+            applyServerReactionUpdate(message);
+        }
+
+        if (message.type === 'reaction_ack' && message.status === 'error') {
+            logError('runtime/chatClient reaction_ack 失败: ' + (message.message || ''), null, 'warn');
+        }
+
+        if (message.type === 'chat_subscribed' && message.channelId) {
+            handleChatSubscribed(message.channelId);
+        }
+
+        requestStoreSync();
+    },
+    onConnectionChange: (state = {}) => {
+        // Chat WS 重连成功后，chatClient 会自动恢复订阅；这里额外触发一次历史补偿。
+        const current = roomConnectionFeature?.getCurrentChannel?.() || chatStore.currentChannelId;
+        if (state.connected && current) {
+            scheduleChatHistoryRefresh(current, 'chat_reconnected', { force: true, delayMs: 300 });
+        }
+        requestStoreSync();
+    },
+});
+
+// Phase 2.2：历史补偿与订阅去重辅助。
+// 原因：进入频道、自动重连、发送前兜底都会触发订阅；真正适合拉历史的稳定时机是收到 chat_subscribed 之后。
+const CHAT_HISTORY_DEBOUNCE_MS = 250;
+const CHAT_HISTORY_MIN_INTERVAL_MS = 1200;
+const chatHistoryTimers = new Map();
+const chatHistoryLastLoadedAt = new Map();
+
+function scheduleChatHistoryRefresh(channelId, reason = 'unknown', options = {}) {
+    const cleanId = String(channelId || '').trim();
+    if (!cleanId) return;
+
+    const now = Date.now();
+    const lastLoadedAt = chatHistoryLastLoadedAt.get(cleanId) || 0;
+    const force = !!options.force;
+    const delayMs = options.delayMs ?? CHAT_HISTORY_DEBOUNCE_MS;
+
+    if (!force && now - lastLoadedAt < CHAT_HISTORY_MIN_INTERVAL_MS) {
+        return;
+    }
+
+    clearTimeout(chatHistoryTimers.get(cleanId));
+    chatHistoryTimers.set(cleanId, setTimeout(async () => {
+        chatHistoryTimers.delete(cleanId);
+        chatHistoryLastLoadedAt.set(cleanId, Date.now());
+        try {
+            await loadServerHistory(cleanId);
+            console.log('[Chat History] refreshed', { channelId: cleanId, reason });
+        } catch (error) {
+            logError('runtime/scheduleChatHistoryRefresh 加载聊天历史失败', error, 'warn');
+        }
+    }, delayMs));
+}
+
+function handleChatSubscribed(channelId) {
+    const cleanId = String(channelId || '').trim();
+    if (!cleanId) return;
+
+    // 如果自动进入频道时 chatStore 还没切到对应频道，这里补齐，避免“进频道看不到历史，切一下才显示”。
+    if (chatStore.currentChannelId !== cleanId) {
+        switchChatChannel(cleanId);
+    }
+
+    scheduleChatHistoryRefresh(cleanId, 'chat_subscribed', { force: true, delayMs: 80 });
+}
+
+// Phase 3：历史补偿。
+// 即使 Chat WebSocket 独立后，仍需要历史补偿：用于启动初次加载、重连漏消息、窗口休眠恢复等场景。
+function refreshCurrentChatHistory(reason = 'manual', options = {}) {
+    const current = roomConnectionFeature?.getCurrentChannel?.() || chatStore.currentChannelId;
+    if (!current) return;
+    scheduleChatHistoryRefresh(current, reason, options);
+}
+
+if (typeof window !== 'undefined') {
+    window.addEventListener('focus', () => {
+        refreshCurrentChatHistory('window_focus', { delayMs: 120 });
+    });
+}
+
+if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            refreshCurrentChatHistory('visibility_resume', { delayMs: 120 });
+        }
+    });
+}
+
+watch(
+    () => [profileStore.displayName, profileStore.avatarColor, profileStore.avatarPreset, profileStore.avatarUrl, profileStore.statusText],
+    ([displayName, avatarColor, avatarPreset, avatarUrl, statusText]) => {
+        if (presenceClient.isConnected()) {
+            presenceClient.updateProfile({ displayName, avatarColor, avatarPreset, avatarUrl, statusText });
+        }
+        // 当自己更新资料时，也需要同步更新本地聊天记录中的自己发送的消息头像。
+        updateChatAvatars(profileStore.userId, avatarColor, avatarPreset, avatarUrl);
+        const identity = presenceClient.getIdentity?.();
+        if (identity && identity !== profileStore.userId) {
+            updateChatAvatars(identity, avatarColor, avatarPreset, avatarUrl);
+        }
+        syncProfileToServer({ silent: true });
     }
 );
 
@@ -306,7 +425,82 @@ function showLocalScreenPreview(track) { return screenShareFeature.showLocalScre
 function getLocalScreenPublication() { return screenShareFeature.getLocalScreenPublication(); }
 function hasPublishedScreenAudioTrack() { return screenShareFeature.hasPublishedScreenAudioTrack(); }
 
-function sendChatMessage(text) { return chatFeature.sendChatMessage(text); }
+function createClientMessageId() {
+    return 'local_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+async function sendChatMessage(text) {
+    const cleanText = String(text || '').trim();
+    if (!cleanText) return false;
+
+    const currentChannel = roomConnectionFeature?.getCurrentChannel?.();
+    if (!currentChannel) {
+        logError('runtime/sendChatMessage 当前未加入频道，无法发送聊天消息', null, 'warn');
+        return false;
+    }
+
+    const clientMessageId = createClientMessageId();
+    const senderUserId = chatClient.getUserId?.() || profileStore.userId;
+    const senderIdentity = chatClient.getIdentity?.() || presenceClient.getIdentity?.() || senderUserId;
+    const senderName = profileStore.displayName || getInputValue('username', localStorage.getItem('lk_username') || '') || '访客';
+
+    const localMessage = addChatMessage({
+        id: clientMessageId,
+        clientMessageId,
+        channelId: currentChannel,
+        senderId: senderUserId,
+        senderUserId,
+        senderIdentity,
+        senderName,
+        senderColor: profileStore.avatarColor,
+        senderPreset: profileStore.avatarPreset,
+        senderAvatarUrl: profileStore.avatarUrl || '',
+        content: cleanText,
+        timestamp: Date.now(),
+        isSelf: true,
+        status: 'sending',
+    });
+
+    // Phase 2.1：发送前确保 Chat WebSocket 处于 OPEN，并补订阅当前频道。
+    await ensureChatSocketConnected(3000);
+    if (currentChannel) chatClient.subscribeChannel(currentChannel);
+
+    let sent = chatClient.sendMessage({
+        clientMessageId: localMessage.clientMessageId || clientMessageId,
+        channelId: currentChannel,
+        content: cleanText,
+        senderColor: profileStore.avatarColor,
+        senderPreset: profileStore.avatarPreset,
+        senderAvatarUrl: profileStore.avatarUrl || '',
+    });
+
+    // 临界状态兜底：如果第一次发送失败，等待/重连后再重试一次。
+    if (!sent) {
+        await ensureChatSocketConnected(2000);
+        if (currentChannel) chatClient.subscribeChannel(currentChannel);
+        sent = chatClient.sendMessage({
+            clientMessageId: localMessage.clientMessageId || clientMessageId,
+            channelId: currentChannel,
+            content: cleanText,
+            senderColor: profileStore.avatarColor,
+            senderPreset: profileStore.avatarPreset,
+            senderAvatarUrl: profileStore.avatarUrl || '',
+        });
+    }
+
+    if (!sent) {
+        markMessageFailed(clientMessageId);
+        const debug = chatClient.getDebugState?.() || {};
+        logError(
+            `runtime/sendChatMessage Chat WebSocket 发送失败 channel=${currentChannel} state=${debug.readyStateText || debug.readyState || 'unknown'} connected=${debug.connected} apiBase=${getCurrentApiBase()}`,
+            null,
+            'warn'
+        );
+    }
+
+    requestStoreSync();
+    return sent;
+}
 function renderChatMessage(msgDataOrSender, text, isSelf) { return chatFeature.renderChatMessage(msgDataOrSender, text, isSelf); }
 
 function addRemoteGainNode(identity, source, track, audioEl) { return remoteAudioFeature.addRemoteGainNode(identity, source, track, audioEl); }
@@ -340,10 +534,10 @@ function startRoomPolling() { return roomConnectionFeature.startRoomPolling(); }
 function stopRoomPolling() { return roomConnectionFeature.stopRoomPolling(); }
 function createChannel() { return roomConnectionFeature.createChannel(); }
 function resetRoomUIAfterDisconnect() { return roomConnectionFeature.resetRoomUIAfterDisconnect(); }
-function joinRoom(options) {
-    // 进入大厅时记录 apiBase，供后续 REST 调用使用
+
+function getCurrentApiBase() {
     try {
-        const cfg = roomConnectionFeature.getServerConfig?.();
+        const cfg = roomConnectionFeature?.getServerConfig?.();
         const base = cfg?.apiBase || (() => {
             const ip = appStore.connection.serverIp || DEFAULT_SERVER_IP;
             const host = ip.includes(':') ? ip.split(':')[0] : ip;
@@ -351,25 +545,92 @@ function joinRoom(options) {
             return `http://${host}:${port}`;
         })();
         if (base) setApiBase(base);
-    } catch (_) {}
-    return afterAction(roomConnectionFeature.joinRoom(options));
+        return base;
+    } catch (_) {
+        return '';
+    }
+}
+
+async function ensureChatSocketConnected(timeoutMs = 3000) {
+    const apiBase = getCurrentApiBase();
+    if (!apiBase) {
+        logError('runtime/ensureChatSocketConnected 缺少 apiBase，无法连接 Chat WebSocket', null, 'warn');
+        return false;
+    }
+
+    const options = {
+        apiBase,
+        userId: profileStore.userId,
+        connectionId: getConnectionId(),
+        identity: presenceClient.getIdentity?.() || profileStore.userId,
+        displayName: profileStore.displayName || getInputValue('username', localStorage.getItem('lk_username') || '') || '访客',
+        avatarColor: profileStore.avatarColor,
+        avatarPreset: profileStore.avatarPreset,
+        avatarUrl: profileStore.avatarUrl,
+        statusText: profileStore.statusText || '在线',
+    };
+
+    try {
+        if (chatClient.ensureConnected) {
+            await chatClient.ensureConnected(options, timeoutMs);
+        } else {
+            await chatClient.connect(options);
+        }
+    } catch (error) {
+        logError('runtime/ensureChatSocketConnected 连接 Chat WebSocket 失败', error, 'warn');
+    }
+
+    const connected = chatClient.isConnected?.() || false;
+    const current = roomConnectionFeature?.getCurrentChannel?.();
+    if (connected && current) chatClient.subscribeChannel(current);
+    return connected;
+}
+
+function joinRoom(options) {
+    // 进入大厅时记录 apiBase，供 REST 和 Chat WebSocket 使用
+    getCurrentApiBase();
+    syncProfileToServer({ silent: true });
+    return afterAction(
+        Promise.resolve(roomConnectionFeature.joinRoom(options)).then(async (result) => {
+            await ensureChatSocketConnected().catch((error) => {
+                logError('runtime/joinRoom 连接 Chat WebSocket 失败', error, 'warn');
+            });
+            return result;
+        })
+    );
 }
 function switchChannel(roomName) {
-    // 切换频道时，先切换本地频道记录，再从服务器加载历史
+    // 切换频道时先切换本地频道记录；历史加载交给 chat_subscribed 后的稳定时机触发。
     if (roomName) {
         switchChatChannel(roomName);
-        loadServerHistory(roomName).catch(() => {});
+        scheduleChatHistoryRefresh(roomName, 'switch_channel', { delayMs: 350 });
     }
-    return afterAction(roomConnectionFeature.switchChannel(roomName));
+    return afterAction(
+        Promise.resolve(roomConnectionFeature.switchChannel(roomName)).then((result) => {
+            if (roomName) chatClient.subscribeChannel(roomName);
+            return result;
+        })
+    );
 }
 function connectToChannel(targetRoomName, options) {
     if (targetRoomName) {
         switchChatChannel(targetRoomName);
-        loadServerHistory(targetRoomName).catch(() => {});
+        scheduleChatHistoryRefresh(targetRoomName, 'connect_to_channel', { delayMs: 350 });
     }
-    return afterAction(roomConnectionFeature.connectToChannel(targetRoomName, options));
+    return afterAction(
+        Promise.resolve(roomConnectionFeature.connectToChannel(targetRoomName, options)).then((result) => {
+            if (result && targetRoomName) chatClient.subscribeChannel(targetRoomName);
+            return result;
+        })
+    );
 }
-function leaveRoom() { return afterAction(roomConnectionFeature.leaveRoom()); }
+function leaveRoom() {
+    return afterAction(
+        Promise.resolve(roomConnectionFeature.leaveRoom()).finally(() => {
+            chatClient.disconnect();
+        })
+    );
+}
 
 
 /** 返回当前 LiveKit Room 对象，仅供 UI 统计面板读取本地 WebRTC stats。 */
@@ -550,6 +811,7 @@ Object.assign(window, {
     switchMicSource,
     __appStore: appStore,
     __presenceClient: presenceClient,
+    __chatClient: chatClient,
     __syncAppStore: syncAppStore,
     getLiveKitRoom,
 });

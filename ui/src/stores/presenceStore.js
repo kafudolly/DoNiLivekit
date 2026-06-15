@@ -9,6 +9,8 @@ import { reactive } from 'vue';
 export const presenceStore = reactive({
     connected: false,
     identity: '',
+    userId: '',
+    connectionId: '',
     displayName: '',
     channels: [],
     participants: {},
@@ -20,6 +22,8 @@ export const presenceStore = reactive({
 export function resetPresenceStore() {
     presenceStore.connected = false;
     presenceStore.identity = '';
+    presenceStore.userId = '';
+    presenceStore.connectionId = '';
     presenceStore.displayName = '';
     presenceStore.channels = [];
     presenceStore.participants = {};
@@ -28,9 +32,11 @@ export function resetPresenceStore() {
 }
 
 /** 记录当前 WebSocket 连接身份。 */
-export function setPresenceConnectionState({ connected, identity, displayName }) {
+export function setPresenceConnectionState({ connected, identity, userId, connectionId, displayName }) {
     presenceStore.connected = !!connected;
     if (identity !== undefined) presenceStore.identity = identity || '';
+    if (userId !== undefined) presenceStore.userId = userId || '';
+    if (connectionId !== undefined) presenceStore.connectionId = connectionId || '';
     if (displayName !== undefined) presenceStore.displayName = displayName || '';
     presenceStore.lastUpdatedAt = Date.now();
 }
@@ -44,21 +50,29 @@ function normalizeMember(member) {
         if (!name) return null;
         return {
             identity: name,
+            userId: name,
+            connectionId: '',
             displayName: name,
+            statusText: '在线',
         };
     }
 
     const identity = String(member.identity || member.name || member.displayName || '').trim();
+    const userId = String(member.userId || member.identity || member.name || member.displayName || '').trim();
+    const connectionId = String(member.connectionId || '').trim();
     const displayName = String(member.displayName || member.name || member.identity || '').trim();
 
     if (!identity && !displayName) return null;
 
     return {
         identity: identity || displayName,
+        userId: userId || identity || displayName,
+        connectionId,
         displayName: displayName || identity,
         avatarColor: member.avatarColor,
         avatarPreset: member.avatarPreset,
         avatarUrl: member.avatarUrl,
+        statusText: member.statusText || '在线',
     };
 }
 
@@ -159,10 +173,13 @@ function applyParticipantMoved(message) {
             if (!exists) {
                 channel.members.push({
                     identity: identity || displayName,
+                    userId: message.userId || identity || displayName,
+                    connectionId: message.connectionId || '',
                     displayName: displayName || identity,
                     avatarColor: message.avatarColor,
                     avatarPreset: message.avatarPreset,
                     avatarUrl: message.avatarUrl,
+                    statusText: message.statusText || '在线',
                 });
             }
         }
@@ -173,11 +190,14 @@ function applyParticipantMoved(message) {
         presenceStore.participants[key] = {
             ...(presenceStore.participants[key] || {}),
             identity: key,
+            userId: message.userId || key,
+            connectionId: message.connectionId || '',
             displayName: displayName || key,
             currentChannel: targetChannel || null,
             avatarColor: message.avatarColor,
             avatarPreset: message.avatarPreset,
             avatarUrl: message.avatarUrl,
+            statusText: message.statusText || '在线',
         };
     }
 }
@@ -205,29 +225,41 @@ function applyParticipantOnline(message) {
     const key = identity || displayName;
     presenceStore.participants[key] = {
         identity: key,
+        userId: participant.userId || key,
+        connectionId: participant.connectionId || '',
         displayName: displayName || key,
         currentChannel: participant.currentChannel || null,
         avatarColor: participant.avatarColor,
         avatarPreset: participant.avatarPreset,
         avatarUrl: participant.avatarUrl,
+        statusText: participant.statusText || '在线',
     };
 }
 
 /** 应用用户资料更新（头像颜色、预设 emoji、头像 URL）。 */
 function applyProfileUpdate(message) {
     const identity = String(message.identity || '').trim();
-    if (identity && presenceStore.participants[identity]) {
-        presenceStore.participants[identity].avatarColor = message.avatarColor;
-        presenceStore.participants[identity].avatarPreset = message.avatarPreset;
-        presenceStore.participants[identity].avatarUrl = message.avatarUrl;
+    const userId = String(message.userId || '').trim();
+
+    const applyToMember = (member) => {
+        if (!member) return;
+        if (message.displayName) member.displayName = message.displayName;
+        member.avatarColor = message.avatarColor;
+        member.avatarPreset = message.avatarPreset;
+        member.avatarUrl = message.avatarUrl;
+        member.statusText = message.statusText || member.statusText || '在线';
+    };
+
+    for (const key of [identity, userId]) {
+        if (key && presenceStore.participants[key]) {
+            applyToMember(presenceStore.participants[key]);
+        }
     }
 
     for (const channel of presenceStore.channels) {
         for (const member of channel.members) {
-            if (member.identity === identity) {
-                member.avatarColor = message.avatarColor;
-                member.avatarPreset = message.avatarPreset;
-                member.avatarUrl = message.avatarUrl;
+            if (member.identity === identity || (userId && member.userId === userId)) {
+                applyToMember(member);
             }
         }
     }

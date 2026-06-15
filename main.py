@@ -7,12 +7,13 @@ DoNiChannel 后端入口（FastAPI 版）。
 3. 提供 Presence WebSocket，用于实时同步"谁在线、谁在哪个语音频道"。
 4. 兼容旧客户端的 /api/rooms 轮询接口。
 5. 聊天消息持久化（SQLite）+ 历史记录拉取。
-6. Reaction 实时同步（通过 Presence WebSocket 广播）。
+6. Reaction 实时同步（旧 REST + Presence 广播兼容路径，后续迁移到 Chat WebSocket）。
 7. 用户资料广播（头像颜色、emoji，让其他客户端渲染正确头像）。
+8. 提供 Chat WebSocket 基础通道，用于后续聊天消息/Reaction 的独立实时链路。
 
 注意：
 - LiveKit 负责音频、屏幕共享、Track 订阅。
-- Presence WebSocket 负责大厅在线状态、频道成员状态、聊天消息广播、Reaction 同步。
+- Presence WebSocket 负责大厅在线状态、频道成员状态；聊天消息/Reaction 保留旧兼容路径，新的实时聊天链路走 /ws/chat。
 - Rust 9001/9002 本地音频采集不经过这里。
 """
 
@@ -33,7 +34,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body, Query, UploadFile, File
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body, Query, UploadFile, File, Header
 from livekit.api import (
     LiveKitAPI,
     AccessToken,
@@ -76,6 +77,13 @@ DEFAULT_ROOM_NAME = "team-meeting-room"
 # 每个频道最多保留的消息条数（超出时删除最旧的）
 CHAT_MAX_MESSAGES_PER_CHANNEL = 500
 
+UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+MAX_AVATAR_UPLOAD_BYTES = 5 * 1024 * 1024
+ALLOWED_AVATAR_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+ALLOWED_AVATAR_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
+# 设置 DONICHANNEL_ADMIN_TOKEN 后，清空全部聊天记录必须带 X-Admin-Token 或 adminToken。
+CHAT_ADMIN_TOKEN = os.environ.get("DONICHANNEL_ADMIN_TOKEN", "").strip()
+
 app = FastAPI(title="DoNiChannel Backend", version="1.1.0")
 
 app.add_middleware(
@@ -91,14 +99,38 @@ app.add_middleware(
 # SQLite 存储
 # ============================================================
 
-os.makedirs(os.path.join(BASE_DIR, "uploads"), exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=os.path.join(BASE_DIR, "uploads")), name="uploads")
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 def get_db_conn() -> sqlite3.Connection:
     """创建 SQLite 连接。"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    """读取表字段集合，用于轻量迁移。"""
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_ddl: str) -> None:
+    """字段不存在时追加字段，兼容旧 rooms.db。"""
+    if column_name not in _table_columns(conn, table_name):
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_ddl}")
+
+
+def _require_admin_token(admin_token: Optional[str], x_admin_token: Optional[str]) -> None:
+    """高风险管理操作的最小保护。"""
+    provided = (x_admin_token or admin_token or "").strip()
+    if not CHAT_ADMIN_TOKEN:
+        raise HTTPException(
+            status_code=403,
+            detail="服务端未设置 DONICHANNEL_ADMIN_TOKEN，禁止清空全部聊天记录",
+        )
+    if provided != CHAT_ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="管理员令牌无效")
 
 
 def init_db() -> None:
@@ -148,14 +180,22 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS user_profiles (
                 identity     TEXT PRIMARY KEY,
+                user_id      TEXT NOT NULL DEFAULT '',
                 display_name TEXT NOT NULL,
                 avatar_color TEXT NOT NULL DEFAULT '#5865f2',
                 avatar_preset TEXT NOT NULL DEFAULT '',
                 avatar_url    TEXT NOT NULL DEFAULT '',
+                status_text   TEXT NOT NULL DEFAULT '在线',
                 updated_at   INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+
+        # 兼容旧 rooms.db：CREATE TABLE IF NOT EXISTS 不会自动补字段。
+        _ensure_column(conn, "chat_messages", "sender_avatar_url", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "user_profiles", "user_id", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "user_profiles", "avatar_url", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "user_profiles", "status_text", "TEXT NOT NULL DEFAULT '在线'")
 
         conn.commit()
     finally:
@@ -322,22 +362,55 @@ def db_get_message(message_id: str) -> Optional[dict]:
 
 # ── 用户资料缓存 ────────────────────────────────────────────────
 
-def db_upsert_profile(identity: str, display_name: str, avatar_color: str, avatar_preset: str, avatar_url: str = "") -> None:
-    """更新/插入用户资料缓存。"""
+def db_upsert_profile(
+    identity: str,
+    display_name: str,
+    avatar_color: str,
+    avatar_preset: str,
+    avatar_url: str = "",
+    status_text: str = "在线",
+    user_id: Optional[str] = None,
+) -> None:
+    """
+    更新/插入用户资料缓存。
+
+    identity 当前阶段作为资料主键使用；新客户端会传 userId，
+    因此历史消息 senderId=userId 能稳定 join 到头像资料。
+    """
+    clean_identity = (identity or user_id or "").strip()
+    if not clean_identity:
+        return
+
+    clean_user_id = (user_id or clean_identity).strip()
+    clean_name = (display_name or "未命名用户").strip()[:24] or "未命名用户"
+    clean_status = (status_text or "在线").strip()[:32] or "在线"
+
     conn = get_db_conn()
     try:
         conn.execute(
             """
-            INSERT INTO user_profiles (identity, display_name, avatar_color, avatar_preset, avatar_url, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO user_profiles
+                (identity, user_id, display_name, avatar_color, avatar_preset, avatar_url, status_text, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(identity) DO UPDATE SET
+                user_id       = excluded.user_id,
                 display_name  = excluded.display_name,
                 avatar_color  = excluded.avatar_color,
                 avatar_preset = excluded.avatar_preset,
                 avatar_url    = excluded.avatar_url,
+                status_text   = excluded.status_text,
                 updated_at    = excluded.updated_at
             """,
-            (identity, display_name, avatar_color, avatar_preset, avatar_url, int(time.time() * 1000)),
+            (
+                clean_identity,
+                clean_user_id,
+                clean_name,
+                avatar_color or "#5865f2",
+                avatar_preset or "",
+                avatar_url or "",
+                clean_status,
+                int(time.time() * 1000),
+            ),
         )
         conn.commit()
     finally:
@@ -345,20 +418,29 @@ def db_upsert_profile(identity: str, display_name: str, avatar_color: str, avata
 
 
 def db_get_profile(identity: str) -> Optional[dict]:
-    """读取用户资料缓存。"""
+    """按 identity/userId 读取用户资料缓存。"""
+    clean_identity = (identity or "").strip()
+    if not clean_identity:
+        return None
+
     conn = get_db_conn()
     try:
         row = conn.execute(
-            "SELECT * FROM user_profiles WHERE identity = ?", (identity,)
+            "SELECT * FROM user_profiles WHERE identity = ? OR user_id = ? LIMIT 1",
+            (clean_identity, clean_identity),
         ).fetchone()
         if not row:
             return None
+        row_keys = row.keys()
+        user_id = row["user_id"] if "user_id" in row_keys and row["user_id"] else row["identity"]
         return {
             "identity": row["identity"],
+            "userId": user_id,
             "displayName": row["display_name"],
             "avatarColor": row["avatar_color"],
             "avatarPreset": row["avatar_preset"],
-            "avatarUrl": row["avatar_url"] if "avatar_url" in row.keys() else "",
+            "avatarUrl": row["avatar_url"] if "avatar_url" in row_keys else "",
+            "statusText": row["status_text"] if "status_text" in row_keys else "在线",
             "updatedAt": row["updated_at"],
         }
     finally:
@@ -429,21 +511,29 @@ async def list_livekit_rooms_and_participants() -> dict:
 
 @dataclass
 class PresenceParticipant:
-    """Presence 层在线用户状态（含头像信息）。"""
+    """Presence 层在线用户状态（含头像信息）。
+
+    identity：当前 LiveKit / Presence 兼容身份。
+    user_id：长期用户身份。
+    connection_id：本次客户端连接身份。
+    """
     identity: str
     display_name: str
+    user_id: str = ""
+    connection_id: str = ""
     current_channel: Optional[str] = None
     avatar_color: str = "#5865f2"
     avatar_preset: str = ""
     avatar_url: str = ""
+    status_text: str = "在线"
 
 
 class PresenceManager:
     """
     管理大厅在线状态、语音频道成员状态。
-    同时作为聊天消息和 Reaction 的广播中心。
 
-    只负责 Presence + 聊天广播，不负责音频。
+    Phase 3 起：PresenceManager 不再负责聊天消息和 Reaction 广播；
+    聊天实时通信由 ChatManager / /ws/chat 负责。
     """
 
     def __init__(self) -> None:
@@ -460,10 +550,13 @@ class PresenceManager:
             members = [
                 {
                     "identity": participant.identity,
+                    "userId": participant.user_id or participant.identity,
+                    "connectionId": participant.connection_id or participant.identity,
                     "displayName": participant.display_name,
                     "avatarColor": participant.avatar_color,
                     "avatarPreset": participant.avatar_preset,
                     "avatarUrl": participant.avatar_url,
+                    "statusText": participant.status_text,
                 }
                 for participant in self.participants.values()
                 if participant.current_channel == room_name
@@ -481,11 +574,14 @@ class PresenceManager:
         participants = {
             identity: {
                 "identity": participant.identity,
+                "userId": participant.user_id or participant.identity,
+                "connectionId": participant.connection_id or participant.identity,
                 "displayName": participant.display_name,
                 "currentChannel": participant.current_channel,
                 "avatarColor": participant.avatar_color,
                 "avatarPreset": participant.avatar_preset,
                 "avatarUrl": participant.avatar_url,
+                "statusText": participant.status_text,
             }
             for identity, participant in self.participants.items()
         }
@@ -504,6 +600,9 @@ class PresenceManager:
         avatar_color: str = "#5865f2",
         avatar_preset: str = "",
         avatar_url: str = "",
+        status_text: str = "在线",
+        user_id: str = "",
+        connection_id: str = "",
     ) -> bool:
         """
         注册 Presence WebSocket 连接。
@@ -535,14 +634,17 @@ class PresenceManager:
             self.participants[identity] = PresenceParticipant(
                 identity=identity,
                 display_name=display_name,
+                user_id=user_id or identity,
+                connection_id=connection_id or identity,
                 current_channel=old_channel,
                 avatar_color=avatar_color,
                 avatar_preset=avatar_preset,
                 avatar_url=avatar_url,
+                status_text=status_text or "在线",
             )
 
         # 持久化用户资料（供历史消息渲染使用）
-        db_upsert_profile(identity, display_name, avatar_color, avatar_preset, avatar_url)
+        db_upsert_profile(user_id or identity, display_name, avatar_color, avatar_preset, avatar_url, status_text=status_text or "在线", user_id=user_id or identity)
 
         if old_websocket and old_websocket is not websocket:
             try:
@@ -568,11 +670,14 @@ class PresenceManager:
                     "type": "participant_online",
                     "participant": {
                         "identity": identity,
+                        "userId": user_id or identity,
+                        "connectionId": connection_id or identity,
                         "displayName": display_name,
                         "currentChannel": old_channel,
                         "avatarColor": avatar_color,
                         "avatarPreset": avatar_preset,
                         "avatarUrl": avatar_url,
+                        "statusText": status_text or "在线",
                     },
                 },
                 exclude_identity=identity,
@@ -601,6 +706,8 @@ class PresenceManager:
                 {
                     "type": "participant_offline",
                     "identity": participant.identity,
+                    "userId": participant.user_id or participant.identity,
+                    "connectionId": participant.connection_id or participant.identity,
                     "displayName": participant.display_name,
                     "from": participant.current_channel,
                 }
@@ -624,33 +731,61 @@ class PresenceManager:
             payload = {
                 "type": "participant_moved",
                 "identity": participant.identity,
+                "userId": participant.user_id or participant.identity,
+                "connectionId": participant.connection_id or participant.identity,
                 "displayName": participant.display_name,
                 "from": old_channel,
                 "to": clean_channel,
+                "avatarColor": participant.avatar_color,
+                "avatarPreset": participant.avatar_preset,
+                "avatarUrl": participant.avatar_url,
+                "statusText": participant.status_text,
             }
 
         await self.broadcast(payload)
 
-    async def update_profile(self, identity: str, avatar_color: str, avatar_preset: str, avatar_url: str) -> None:
-        """更新用户头像信息，并广播给其他人。"""
+    async def update_profile(
+        self,
+        identity: str,
+        avatar_color: str,
+        avatar_preset: str,
+        avatar_url: str,
+        display_name: Optional[str] = None,
+        status_text: str = "在线",
+    ) -> None:
+        """更新用户资料，并广播给其他人。"""
         async with self.lock:
             participant = self.participants.get(identity)
             if not participant:
                 return
-            participant.avatar_color = avatar_color
-            participant.avatar_preset = avatar_preset
-            participant.avatar_url = avatar_url
+            if display_name:
+                participant.display_name = display_name.strip()[:24] or participant.display_name
+            participant.avatar_color = avatar_color or "#5865f2"
+            participant.avatar_preset = avatar_preset or ""
+            participant.avatar_url = avatar_url or ""
+            participant.status_text = (status_text or participant.status_text or "在线").strip()[:32] or "在线"
 
-        db_upsert_profile(identity, participant.display_name, avatar_color, avatar_preset, avatar_url)
+        db_upsert_profile(
+            participant.user_id or identity,
+            participant.display_name,
+            participant.avatar_color,
+            participant.avatar_preset,
+            participant.avatar_url,
+            status_text=participant.status_text,
+            user_id=participant.user_id or identity,
+        )
 
         await self.broadcast(
             {
                 "type": "profile_updated",
                 "identity": identity,
+                "userId": participant.user_id or identity,
+                "connectionId": participant.connection_id or identity,
                 "displayName": participant.display_name,
-                "avatarColor": avatar_color,
-                "avatarPreset": avatar_preset,
-                "avatarUrl": avatar_url,
+                "avatarColor": participant.avatar_color,
+                "avatarPreset": participant.avatar_preset,
+                "avatarUrl": participant.avatar_url,
+                "statusText": participant.status_text,
             },
             exclude_identity=identity,
         )
@@ -695,7 +830,297 @@ class PresenceManager:
             await self.disconnect(identity, websocket)
 
 
+@dataclass
+class ChatConnection:
+    """Chat WebSocket 连接状态。"""
+    connection_id: str
+    user_id: str
+    identity: str
+    display_name: str
+    avatar_color: str = "#5865f2"
+    avatar_preset: str = ""
+    avatar_url: str = ""
+    status_text: str = "在线"
+    current_channel: Optional[str] = None
+    websocket: WebSocket = field(repr=False, default=None)
+
+
+class ChatManager:
+    """
+    独立聊天 WebSocket 管理器（Phase 1）。
+
+    当前阶段只建立独立 /ws/chat 通道、维护订阅频道、支持 ping/pong。
+    后续 Phase 2 再把消息发送和 Reaction 从 REST/Presence 迁移到这里。
+    """
+
+    def __init__(self) -> None:
+        self.active_connections: Dict[str, ChatConnection] = {}
+        self.lock = asyncio.Lock()
+
+    async def connect(
+        self,
+        websocket: WebSocket,
+        *,
+        connection_id: str,
+        user_id: str,
+        identity: str,
+        display_name: str,
+        avatar_color: str = "#5865f2",
+        avatar_preset: str = "",
+        avatar_url: str = "",
+        status_text: str = "在线",
+    ) -> bool:
+        try:
+            await websocket.accept()
+        except Exception as error:
+            print(f"[chat] WebSocket accept 失败: connectionId={connection_id}, error={error}")
+            return False
+
+        old_websocket = None
+        async with self.lock:
+            old_conn = self.active_connections.get(connection_id)
+            old_websocket = old_conn.websocket if old_conn else None
+            self.active_connections[connection_id] = ChatConnection(
+                connection_id=connection_id,
+                user_id=user_id,
+                identity=identity,
+                display_name=display_name,
+                avatar_color=avatar_color or "#5865f2",
+                avatar_preset=avatar_preset or "",
+                avatar_url=avatar_url or "",
+                status_text=status_text or "在线",
+                current_channel=old_conn.current_channel if old_conn else None,
+                websocket=websocket,
+            )
+
+        if old_websocket and old_websocket is not websocket:
+            try:
+                await old_websocket.close(code=4001)
+            except Exception:
+                pass
+
+        await self.send_to_connection(
+            connection_id,
+            {
+                "type": "chat_connected",
+                "connectionId": connection_id,
+                "userId": user_id,
+                "identity": identity,
+                "displayName": display_name,
+                "avatarColor": avatar_color or "#5865f2",
+                "avatarPreset": avatar_preset or "",
+                "avatarUrl": avatar_url or "",
+                "statusText": status_text or "在线",
+            },
+            websocket=websocket,
+        )
+        print(f"[chat] connected userId={user_id} connectionId={connection_id} identity={identity}")
+        return True
+
+    async def disconnect(self, connection_id: str, websocket: Optional[WebSocket] = None) -> None:
+        async with self.lock:
+            current = self.active_connections.get(connection_id)
+            if websocket is not None and current and current.websocket is not websocket:
+                return
+            conn = self.active_connections.pop(connection_id, None)
+
+        if conn:
+            print(f"[chat] disconnected userId={conn.user_id} connectionId={connection_id} channel={conn.current_channel}")
+
+    async def send_to_connection(self, connection_id: str, payload: dict, websocket: Optional[WebSocket] = None) -> bool:
+        conn = self.active_connections.get(connection_id)
+        target_ws = websocket or (conn.websocket if conn else None)
+        if not target_ws:
+            return False
+
+        try:
+            await target_ws.send_text(json.dumps(payload, ensure_ascii=False))
+            return True
+        except Exception as error:
+            print(f"[chat] 发送消息失败，清理连接: connectionId={connection_id}, error={error}")
+            await self.disconnect(connection_id, target_ws)
+            return False
+
+    async def subscribe_channel(self, connection_id: str, channel_id: Optional[str]) -> None:
+        clean_channel = (channel_id or "").strip() or None
+
+        if clean_channel is not None and clean_channel not in get_all_rooms_from_db():
+            raise ValueError(f"频道不存在: {clean_channel}")
+
+        async with self.lock:
+            conn = self.active_connections.get(connection_id)
+            if not conn:
+                raise ValueError(f"Chat 连接不存在: {connection_id}")
+            conn.current_channel = clean_channel
+
+        await self.send_to_connection(
+            connection_id,
+            {
+                "type": "chat_subscribed",
+                "channelId": clean_channel,
+            },
+        )
+        print(f"[chat] subscribed connectionId={connection_id} channel={clean_channel}")
+
+    async def handle_send_message(self, connection_id: str, body: dict) -> None:
+        """处理 Chat WebSocket 发送消息：保存 SQLite、ACK、按频道广播。"""
+        async with self.lock:
+            conn = self.active_connections.get(connection_id)
+
+        if not conn:
+            raise ValueError(f"Chat 连接不存在: {connection_id}")
+
+        channel_id = str(body.get("channelId") or conn.current_channel or "").strip()
+        content = str(body.get("content") or "").strip()
+        client_message_id = str(body.get("clientMessageId") or body.get("id") or "").strip()
+
+        if not channel_id:
+            raise ValueError("channelId 不能为空")
+        if channel_id not in get_all_rooms_from_db():
+            raise ValueError(f"频道不存在: {channel_id}")
+        if not content:
+            raise ValueError("消息内容不能为空")
+        if len(content) > 4000:
+            raise ValueError("消息过长，最多 4000 字符")
+
+        message_id = client_message_id or f"msg_{uuid.uuid4().hex}"
+        timestamp = int(time.time() * 1000)
+
+        msg = {
+            "id": message_id,
+            "clientMessageId": client_message_id or message_id,
+            "serverMessageId": message_id,
+            "channelId": channel_id,
+            "senderId": conn.user_id,
+            "senderUserId": conn.user_id,
+            "senderIdentity": conn.identity,
+            "senderName": conn.display_name,
+            "senderColor": str(body.get("senderColor") or conn.avatar_color or "#5865f2"),
+            "senderPreset": str(body.get("senderPreset") if body.get("senderPreset") is not None else conn.avatar_preset or ""),
+            "senderAvatarUrl": str(body.get("senderAvatarUrl") if body.get("senderAvatarUrl") is not None else conn.avatar_url or ""),
+            "content": content,
+            "timestamp": timestamp,
+            "reactions": {},
+            "isSelf": False,
+        }
+
+        # 保存发送者资料，方便历史消息渲染头像。
+        db_upsert_profile(conn.user_id, conn.display_name, msg["senderColor"], msg["senderPreset"], msg["senderAvatarUrl"], status_text=conn.status_text, user_id=conn.user_id)
+        db_save_message(msg)
+
+        await self.send_to_connection(
+            connection_id,
+            {
+                "type": "message_ack",
+                "clientMessageId": client_message_id or message_id,
+                "serverMessageId": message_id,
+                "messageId": message_id,
+                "channelId": channel_id,
+                "status": "ok",
+            },
+        )
+
+        await self.broadcast_to_channel(
+            channel_id,
+            {
+                "type": "message_created",
+                "message": msg,
+            },
+        )
+
+        # Phase 3：聊天消息只走 Chat WebSocket，不再通过 Presence 广播。
+
+        print(f"[chat] message_created channel={channel_id} id={message_id} from={conn.user_id} online={self.get_connection_count()}")
+
+    async def handle_toggle_reaction(self, connection_id: str, body: dict) -> None:
+        """处理 Chat WebSocket Reaction/Pin：更新 SQLite、ACK、按频道广播。"""
+        async with self.lock:
+            conn = self.active_connections.get(connection_id)
+
+        if not conn:
+            raise ValueError(f"Chat 连接不存在: {connection_id}")
+
+        message_id = str(body.get("messageId") or "").strip()
+        emoji = str(body.get("emoji") or "").strip()
+        fallback_channel_id = str(body.get("channelId") or conn.current_channel or "").strip()
+
+        if not message_id or not emoji:
+            raise ValueError("messageId / emoji 不能为空")
+
+        msg = db_get_message(message_id)
+        if not msg:
+            raise ValueError("消息不存在")
+
+        channel_id = msg.get("channelId") or fallback_channel_id
+        reactions = msg["reactions"]
+        if emoji not in reactions:
+            reactions[emoji] = []
+
+        if conn.user_id in reactions[emoji]:
+            reactions[emoji].remove(conn.user_id)
+            if not reactions[emoji]:
+                del reactions[emoji]
+            action = "removed"
+        else:
+            reactions[emoji].append(conn.user_id)
+            action = "added"
+
+        db_update_reactions(message_id, reactions)
+
+        await self.send_to_connection(
+            connection_id,
+            {
+                "type": "reaction_ack",
+                "messageId": message_id,
+                "channelId": channel_id,
+                "emoji": emoji,
+                "action": action,
+                "status": "ok",
+                "reactions": reactions,
+            },
+        )
+
+        reaction_payload = {
+            "type": "reaction_updated",
+            "messageId": message_id,
+            "channelId": channel_id,
+            "emoji": emoji,
+            "senderId": conn.user_id,
+            "senderUserId": conn.user_id,
+            "senderIdentity": conn.identity,
+            "action": action,
+            "reactions": reactions,
+        }
+        await self.broadcast_to_channel(channel_id, reaction_payload)
+
+        # Phase 3：Reaction 只走 Chat WebSocket，不再通过 Presence 广播。
+
+        print(f"[chat] reaction_updated channel={channel_id} message={message_id} emoji={emoji} action={action} from={conn.user_id}")
+
+    async def broadcast_to_channel(self, channel_id: str, payload: dict, exclude_connection_id: Optional[str] = None) -> None:
+        """Phase 2 使用：只向订阅指定频道的 Chat 客户端广播。"""
+        message = json.dumps(payload, ensure_ascii=False)
+        dead_connections = []
+
+        for connection_id, conn in list(self.active_connections.items()):
+            if exclude_connection_id and connection_id == exclude_connection_id:
+                continue
+            if conn.current_channel != channel_id:
+                continue
+            try:
+                await conn.websocket.send_text(message)
+            except Exception:
+                dead_connections.append((connection_id, conn.websocket))
+
+        for connection_id, websocket in dead_connections:
+            await self.disconnect(connection_id, websocket)
+
+    def get_connection_count(self) -> int:
+        return len(self.active_connections)
+
+
 presence_manager = PresenceManager()
+chat_manager = ChatManager()
 
 
 # ============================================================
@@ -776,8 +1201,20 @@ async def create_room(body: dict = Body(default_factory=dict)):
 # ── 聊天 REST 接口 ──────────────────────────────────────────────
 
 @app.delete("/api/chat/history")
-async def clear_chat_history(channel: Optional[str] = Query(None, description="频道 ID，不传则清空全部")):
-    """清空聊天记录（指定频道或全部频道）。"""
+async def clear_chat_history(
+    channel: Optional[str] = Query(None, description="频道 ID，不传则清空全部"),
+    adminToken: Optional[str] = Query(None, description="管理员令牌；清空全部记录时必填"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
+):
+    """清空聊天记录。
+
+    安全策略：
+    - 指定 channel：保留原有行为，方便现有 UI 清频道记录。
+    - 不指定 channel：属于高风险全量删除，必须设置并提供 DONICHANNEL_ADMIN_TOKEN。
+    """
+    if not channel:
+        _require_admin_token(adminToken, x_admin_token)
+
     conn = get_db_conn()
     try:
         if channel:
@@ -842,14 +1279,9 @@ async def post_chat_message(body: dict = Body(default_factory=dict)):
     # 持久化
     db_save_message(msg)
 
-    # 通过 Presence WebSocket 广播给频道内所有在线成员
-    broadcast_payload = {
-        "type": "chat_message",
-        "message": msg,
-    }
-    await presence_manager.broadcast(broadcast_payload, exclude_identity=sender_id)
-
-    return JSONResponse({"ok": True, "id": msg["id"]})
+    # Phase 3：REST 发送接口仅保留为兼容/调试入口，只持久化，不再通过 Presence 广播。
+    # 新客户端实时发送应走 /ws/chat。
+    return JSONResponse({"ok": True, "id": msg["id"], "realtime": "chat_ws_required"})
 
 
 @app.post("/api/chat/reaction")
@@ -888,53 +1320,88 @@ async def post_reaction(body: dict = Body(default_factory=dict)):
     # 持久化
     db_update_reactions(message_id, reactions)
 
-    # 广播
-    broadcast_payload = {
-        "type": "reaction_update",
-        "messageId": message_id,
-        "channelId": channel_id,
-        "emoji": emoji,
-        "senderId": sender_id,
-        "action": action,
-        "reactions": reactions,
-    }
-    await presence_manager.broadcast(broadcast_payload)
-
-    return JSONResponse({"ok": True, "action": action, "reactions": reactions})
+    # Phase 3：REST Reaction 接口仅保留为兼容/调试入口，只持久化，不再通过 Presence 广播。
+    # 新客户端实时 Reaction 应走 /ws/chat。
+    return JSONResponse({"ok": True, "action": action, "reactions": reactions, "realtime": "chat_ws_required"})
 
 
 @app.get("/api/user/profile")
-async def get_user_profile(identity: str = Query(...)):
-    """查询某个用户的资料缓存（头像颜色、emoji）。"""
-    profile = db_get_profile(identity)
+async def get_user_profile(
+    userId: Optional[str] = Query(None),
+    identity: Optional[str] = Query(None),
+):
+    """查询某个用户的资料缓存（优先 userId，兼容 identity）。"""
+    key = (userId or identity or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="userId 或 identity 不能为空")
+    profile = db_get_profile(key)
     if not profile:
         raise HTTPException(status_code=404, detail="用户不存在")
     return JSONResponse(profile)
 
 
+@app.post("/api/user/profile")
+async def save_user_profile(body: dict = Body(default_factory=dict)):
+    """保存当前用户资料。
+
+    新客户端按 userId 持久化 displayName/avatar/status，Presence 负责实时广播。
+    """
+    user_id = str(body.get("userId") or body.get("identity") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="userId 不能为空")
+
+    display_name = str(body.get("displayName") or "未命名用户").strip()[:24] or "未命名用户"
+    avatar_color = str(body.get("avatarColor") or "#5865f2").strip()[:32] or "#5865f2"
+    avatar_preset = str(body.get("avatarPreset") or "").strip()[:16]
+    avatar_url = str(body.get("avatarUrl") or "").strip()[:512]
+    status_text = str(body.get("statusText") or "在线").strip()[:32] or "在线"
+
+    db_upsert_profile(
+        user_id,
+        display_name,
+        avatar_color,
+        avatar_preset,
+        avatar_url,
+        status_text=status_text,
+        user_id=user_id,
+    )
+    profile = db_get_profile(user_id)
+    return JSONResponse({"ok": True, "profile": profile})
+
+
 @app.post("/api/upload/avatar")
 async def upload_avatar(file: UploadFile = File(...)):
     """上传自定义头像，返回可访问的 URL。"""
-    content_type = file.content_type or ""
-    if not content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="必须上传图片文件")
-    
+    content_type = (file.content_type or "").lower().split(";")[0].strip()
+    if content_type not in ALLOWED_AVATAR_MIME_TYPES:
+        raise HTTPException(status_code=400, detail="只允许上传 png/jpg/jpeg/webp/gif 图片")
+
     filename_orig = file.filename or ""
-    ext = filename_orig.split(".")[-1] if "." in filename_orig else "png"
-    # 防御性：避免没有扩展名或过长
-    if not ext or len(ext) > 10:
-        ext = "png"
-        
-    filename = f"{uuid.uuid4().hex}.{ext}"
-    filepath = os.path.join(BASE_DIR, "uploads", filename)
-    
-    content = await file.read()
-    if len(content) > 5 * 1024 * 1024:
+    ext = filename_orig.rsplit(".", 1)[-1].lower() if "." in filename_orig else ""
+    mime_default_ext = {
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/webp": "webp",
+        "image/gif": "gif",
+    }.get(content_type, "png")
+    if ext not in ALLOWED_AVATAR_EXTENSIONS:
+        ext = mime_default_ext
+
+    content = await file.read(MAX_AVATAR_UPLOAD_BYTES + 1)
+    if len(content) > MAX_AVATAR_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="图片不能超过 5MB")
-        
+    if not content:
+        raise HTTPException(status_code=400, detail="上传文件为空")
+
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.abspath(os.path.join(UPLOADS_DIR, filename))
+    uploads_abs = os.path.abspath(UPLOADS_DIR)
+    if not filepath.startswith(uploads_abs):
+        raise HTTPException(status_code=400, detail="非法文件路径")
+
     with open(filepath, "wb") as f:
         f.write(content)
-        
+
     return {"ok": True, "url": f"/uploads/{filename}"}
 
 
@@ -959,6 +1426,9 @@ async def presence_websocket(websocket: WebSocket):
     avatar_color = websocket.query_params.get("avatarColor", "#5865f2")
     avatar_preset = websocket.query_params.get("avatarPreset", "")
     avatar_url = websocket.query_params.get("avatarUrl", "")
+    status_text = websocket.query_params.get("statusText", "在线")
+    user_id = websocket.query_params.get("userId", "")
+    connection_id = websocket.query_params.get("connectionId", "")
 
     if not identity:
         identity = f"{user}-{uuid.uuid4().hex[:8]}"
@@ -970,6 +1440,9 @@ async def presence_websocket(websocket: WebSocket):
         avatar_color=avatar_color,
         avatar_preset=avatar_preset,
         avatar_url=avatar_url,
+        status_text=status_text or "在线",
+        user_id=user_id or identity,
+        connection_id=connection_id or identity,
     )
 
     if not connected:
@@ -1022,7 +1495,9 @@ async def presence_websocket(websocket: WebSocket):
                 new_color = str(message.get("avatarColor") or "#5865f2")
                 new_preset = str(message.get("avatarPreset") or "")
                 new_url = str(message.get("avatarUrl") or "")
-                await presence_manager.update_profile(identity, new_color, new_preset, new_url)
+                new_name = str(message.get("displayName") or "").strip() or None
+                new_status = str(message.get("statusText") or "在线")
+                await presence_manager.update_profile(identity, new_color, new_preset, new_url, display_name=new_name, status_text=new_status)
 
             else:
                 await presence_manager.send_to(
@@ -1048,6 +1523,164 @@ async def presence_websocket(websocket: WebSocket):
     except Exception as error:
         print(f"[presence] WebSocket 异常: identity={identity}, error={error}")
         await presence_manager.disconnect(identity, websocket)
+
+
+# ============================================================
+# Chat WebSocket（Phase 1：独立聊天通道基础）
+# ============================================================
+
+@app.websocket("/ws/chat")
+async def chat_websocket(websocket: WebSocket):
+    """
+    Chat WebSocket 入口（Phase 1）。
+
+    当前阶段用于验证独立聊天通道：
+    - {"type":"ping"}
+    - {"type":"subscribe_channel", "channelId":"day0"}
+    - {"type":"unsubscribe_channel"}
+    - {"type":"request_state"}
+
+    后续 Phase 2 再承载 send_message / toggle_reaction。
+    """
+    user = websocket.query_params.get("user", "访客").strip() or "访客"
+    user_id = websocket.query_params.get("userId", "").strip()
+    connection_id = websocket.query_params.get("connectionId", "").strip()
+    identity = websocket.query_params.get("identity", "").strip()
+    avatar_color = websocket.query_params.get("avatarColor", "#5865f2").strip() or "#5865f2"
+    avatar_preset = websocket.query_params.get("avatarPreset", "").strip()
+    avatar_url = websocket.query_params.get("avatarUrl", "").strip()
+    status_text = websocket.query_params.get("statusText", "在线").strip() or "在线"
+
+    if not user_id:
+        user_id = identity or f"u_{uuid.uuid4().hex[:12]}"
+    if not connection_id:
+        connection_id = f"conn_{uuid.uuid4().hex[:12]}"
+    if not identity:
+        identity = user_id
+
+    connected = await chat_manager.connect(
+        websocket,
+        connection_id=connection_id,
+        user_id=user_id,
+        identity=identity,
+        display_name=user,
+        avatar_color=avatar_color,
+        avatar_preset=avatar_preset,
+        avatar_url=avatar_url,
+        status_text=status_text,
+    )
+    if not connected:
+        return
+
+    try:
+        while True:
+            raw_message = await websocket.receive_text()
+
+            try:
+                message = json.loads(raw_message)
+            except json.JSONDecodeError:
+                await chat_manager.send_to_connection(
+                    connection_id,
+                    {
+                        "type": "error",
+                        "scope": "chat",
+                        "message": "Chat 消息不是合法 JSON",
+                        "raw": raw_message,
+                    },
+                    websocket=websocket,
+                )
+                continue
+
+            message_type = message.get("type")
+
+            if message_type == "ping":
+                await chat_manager.send_to_connection(connection_id, {"type": "pong", "scope": "chat"})
+
+            elif message_type == "subscribe_channel":
+                try:
+                    await chat_manager.subscribe_channel(connection_id, message.get("channelId"))
+                except ValueError as error:
+                    await chat_manager.send_to_connection(
+                        connection_id,
+                        {
+                            "type": "error",
+                            "scope": "chat",
+                            "action": "subscribe_channel",
+                            "message": str(error),
+                        },
+                    )
+
+            elif message_type == "unsubscribe_channel":
+                await chat_manager.subscribe_channel(connection_id, None)
+
+            elif message_type == "request_state":
+                conn = chat_manager.active_connections.get(connection_id)
+                await chat_manager.send_to_connection(
+                    connection_id,
+                    {
+                        "type": "chat_state",
+                        "connectionId": connection_id,
+                        "userId": user_id,
+                        "identity": identity,
+                        "displayName": user,
+                        "channelId": conn.current_channel if conn else None,
+                        "onlineChatConnections": chat_manager.get_connection_count(),
+                    },
+                )
+
+            elif message_type == "send_message":
+                try:
+                    await chat_manager.handle_send_message(connection_id, message)
+                except ValueError as error:
+                    await chat_manager.send_to_connection(
+                        connection_id,
+                        {
+                            "type": "message_ack",
+                            "clientMessageId": message.get("clientMessageId"),
+                            "status": "error",
+                            "message": str(error),
+                        },
+                    )
+
+            elif message_type == "toggle_reaction":
+                try:
+                    await chat_manager.handle_toggle_reaction(connection_id, message)
+                except ValueError as error:
+                    await chat_manager.send_to_connection(
+                        connection_id,
+                        {
+                            "type": "reaction_ack",
+                            "messageId": message.get("messageId"),
+                            "emoji": message.get("emoji"),
+                            "status": "error",
+                            "message": str(error),
+                        },
+                    )
+
+            else:
+                await chat_manager.send_to_connection(
+                    connection_id,
+                    {
+                        "type": "error",
+                        "scope": "chat",
+                        "message": f"未知 Chat 消息类型: {message_type}",
+                    },
+                )
+
+    except WebSocketDisconnect:
+        await chat_manager.disconnect(connection_id, websocket)
+
+    except RuntimeError as error:
+        error_text = str(error)
+        if "WebSocket is not connected" in error_text:
+            await chat_manager.disconnect(connection_id, websocket)
+            return
+        print(f"[chat] WebSocket 运行时异常: connectionId={connection_id}, error={error}")
+        await chat_manager.disconnect(connection_id, websocket)
+
+    except Exception as error:
+        print(f"[chat] WebSocket 异常: connectionId={connection_id}, error={error}")
+        await chat_manager.disconnect(connection_id, websocket)
 
 
 # ============================================================

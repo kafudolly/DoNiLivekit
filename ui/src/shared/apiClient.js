@@ -62,9 +62,13 @@ async function apiFetch(path, options = {}) {
  * @param {string|null} [channelId] - 频道 ID，不传则清空全部
  * @returns {Promise<{ ok: boolean, channel: string }>}
  */
-export async function clearChatHistory(channelId) {
+export async function clearChatHistory(channelId, { adminToken } = {}) {
   let path = '/api/chat/history';
-  if (channelId) path += `?channel=${encodeURIComponent(channelId)}`;
+  const params = new URLSearchParams();
+  if (channelId) params.set('channel', channelId);
+  if (adminToken) params.set('adminToken', adminToken);
+  const qs = params.toString();
+  if (qs) path += `?${qs}`;
   return apiFetch(path, { method: 'DELETE' });
 }
 
@@ -116,15 +120,36 @@ export async function syncReaction({ messageId, emoji, senderId, channelId }) {
 
 /**
  * 查询某个用户的资料缓存。
- * @param {string} identity
- * @returns {Promise<{ identity, displayName, avatarColor, avatarPreset, avatarUrl }|null>}
+ * 优先使用 userId，兼容旧 identity。
+ * @param {string} userId
+ * @returns {Promise<{ identity, userId, displayName, avatarColor, avatarPreset, avatarUrl, statusText }|null>}
  */
-export async function fetchUserProfile(identity) {
+export async function fetchUserProfile(userId) {
   try {
-    return await apiFetch(`/api/user/profile?identity=${encodeURIComponent(identity)}`);
+    const key = encodeURIComponent(userId || '');
+    if (!key) return null;
+    return await apiFetch(`/api/user/profile?userId=${key}`);
   } catch (_) {
     return null;
   }
+}
+
+/**
+ * 保存用户资料到后端 SQLite。
+ * @param {{ userId, displayName, avatarColor, avatarPreset, avatarUrl, statusText }} profile
+ */
+export async function saveUserProfile(profile) {
+  return apiFetch('/api/user/profile', {
+    method: 'POST',
+    body: JSON.stringify({
+      userId: profile.userId,
+      displayName: profile.displayName,
+      avatarColor: profile.avatarColor,
+      avatarPreset: profile.avatarPreset,
+      avatarUrl: profile.avatarUrl || '',
+      statusText: profile.statusText || '在线',
+    }),
+  });
 }
 
 /**
@@ -177,13 +202,29 @@ export async function silentPostChatMessage(msg) {
 
 /**
  * 静默版 syncReaction：失败时只打日志。
+ *
+ * Phase 2：新客户端优先通过独立 Chat WebSocket 同步 Reaction。
+ * 若 Chat WebSocket 不可用，则回退到旧 REST 接口，保持兼容。
  */
 export async function silentSyncReaction(params) {
   try {
-    if (!_apiBase) return;
+    const chatClient = window.__chatClient;
+    if (chatClient?.isConnected?.()) {
+      const sent = chatClient.toggleReaction?.({
+        messageId: params.messageId,
+        emoji: params.emoji,
+        channelId: params.channelId,
+      });
+      if (sent) return { ok: true, via: 'chat_ws' };
+    }
+
     return await syncReaction(params);
   } catch (e) {
-    logError('apiClient/silentSyncReaction Reaction 同步失败', e, 'warn');
+    logError(
+      `apiClient/silentSyncReaction Reaction 同步失败 messageId=${params?.messageId || ''} emoji=${params?.emoji || ''} channel=${params?.channelId || ''}`,
+      e,
+      'warn'
+    );
     return null;
   }
 }

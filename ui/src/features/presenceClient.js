@@ -16,7 +16,10 @@ import {
 export function createPresenceClient({ logError, onMessage }) {
     let socket = null;
     let identity = '';
+    let userId = '';
+    let connectionId = '';
     let displayName = '';
+    let lastConnectOptions = null;
     let shouldReconnect = false;
     let reconnectTimer = null;
     let lastApiBase = '';
@@ -37,6 +40,11 @@ export function createPresenceClient({ logError, onMessage }) {
         return `${safeName}-${Math.random().toString(16).slice(2, 10)}`;
     }
 
+    /** 为本次前端会话生成 connectionId。 */
+    function createConnectionId() {
+        return `conn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+    }
+
     /** 发送 JSON 消息；连接未就绪时直接忽略。 */
     function send(payload) {
         if (!socket || socket.readyState !== WebSocket.OPEN) return false;
@@ -45,7 +53,7 @@ export function createPresenceClient({ logError, onMessage }) {
     }
 
     /** 连接 Presence WebSocket。 */
-    async function connect({ apiBase, username, identity: propIdentity, avatarColor, avatarPreset, avatarUrl }) {
+    async function connect({ apiBase, username, identity: propIdentity, userId: propUserId, connectionId: propConnectionId, avatarColor, avatarPreset, avatarUrl, statusText }) {
         if (
             socket &&
             (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
@@ -55,15 +63,22 @@ export function createPresenceClient({ logError, onMessage }) {
 
         const cleanName = String(username || '访客').trim();
         displayName = cleanName;
-        // 优先使用传入的 identity，其次 sessionStorage，最后自动生成
-        identity = propIdentity || sessionStorage.getItem('lk_presence_identity') || createIdentity(cleanName);
+        // userId 是长期身份；identity 保持旧 LiveKit/Presence 兼容；connectionId 是本次连接身份。
+        userId = propUserId || propIdentity || sessionStorage.getItem('lk_presence_user_id') || '';
+        identity = propIdentity || userId || sessionStorage.getItem('lk_presence_identity') || createIdentity(cleanName);
+        connectionId = propConnectionId || sessionStorage.getItem('lk_presence_connection_id') || createConnectionId();
+
+        if (!userId) userId = identity;
+        sessionStorage.setItem('lk_presence_user_id', userId);
         sessionStorage.setItem('lk_presence_identity', identity);
+        sessionStorage.setItem('lk_presence_connection_id', connectionId);
 
         lastApiBase = apiBase;
         shouldReconnect = true;
+        lastConnectOptions = { apiBase, username: displayName, identity, userId, connectionId, avatarColor, avatarPreset, avatarUrl, statusText };
 
         const wsBase = toWsBase(apiBase);
-        const url = `${wsBase}/ws/presence?user=${encodeURIComponent(displayName)}&identity=${encodeURIComponent(identity)}&avatarColor=${encodeURIComponent(avatarColor || '#5865f2')}&avatarPreset=${encodeURIComponent(avatarPreset || '')}&avatarUrl=${encodeURIComponent(avatarUrl || '')}`;
+        const url = `${wsBase}/ws/presence?user=${encodeURIComponent(displayName)}&identity=${encodeURIComponent(identity)}&userId=${encodeURIComponent(userId)}&connectionId=${encodeURIComponent(connectionId)}&avatarColor=${encodeURIComponent(avatarColor || '#5865f2')}&avatarPreset=${encodeURIComponent(avatarPreset || '')}&avatarUrl=${encodeURIComponent(avatarUrl || '')}&statusText=${encodeURIComponent(statusText || '在线')}`;
 
         await new Promise((resolve, reject) => {
             socket = new WebSocket(url);
@@ -73,6 +88,8 @@ export function createPresenceClient({ logError, onMessage }) {
                 setPresenceConnectionState({
                     connected: true,
                     identity,
+                    userId,
+                    connectionId,
                     displayName,
                 });
                 resolve();
@@ -102,6 +119,8 @@ export function createPresenceClient({ logError, onMessage }) {
                 setPresenceConnectionState({
                     connected: false,
                     identity,
+                    userId,
+                    connectionId,
                     displayName,
                 });
 
@@ -110,7 +129,7 @@ export function createPresenceClient({ logError, onMessage }) {
                 if (shouldReconnect && lastApiBase) {
                     clearTimeout(reconnectTimer);
                     reconnectTimer = setTimeout(() => {
-                        connect({ apiBase: lastApiBase, username: displayName }).catch((error) => {
+                        connect(lastConnectOptions || { apiBase: lastApiBase, username: displayName, identity, userId, connectionId }).catch((error) => {
                             logError?.('presenceClient/reconnect Presence 重连失败', error, 'warn');
                         });
                     }, 1500);
@@ -158,18 +177,29 @@ export function createPresenceClient({ logError, onMessage }) {
         return identity;
     }
 
+    function getUserId() {
+        return userId || identity;
+    }
+
+    function getConnectionId() {
+        return connectionId;
+    }
+
     /** 当前连接是否可用。 */
     function isConnected() {
         return !!socket && socket.readyState === WebSocket.OPEN;
     }
 
     /** 更新并广播当前用户的个人资料 */
-    function updateProfile({ avatarColor, avatarPreset, avatarUrl }) {
+    function updateProfile({ displayName: nextDisplayName, avatarColor, avatarPreset, avatarUrl, statusText }) {
+        if (nextDisplayName) displayName = String(nextDisplayName).trim() || displayName;
         return send({
             type: 'update_profile',
+            displayName: displayName || nextDisplayName || '',
             avatarColor,
             avatarPreset,
             avatarUrl: avatarUrl || '',
+            statusText: statusText || '在线',
         });
     }
 
@@ -180,6 +210,8 @@ export function createPresenceClient({ logError, onMessage }) {
         joinChannel,
         leaveChannel,
         getIdentity,
+        getUserId,
+        getConnectionId,
         isConnected,
         updateProfile,
     };

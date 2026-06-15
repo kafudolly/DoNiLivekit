@@ -5,30 +5,12 @@ import { logError } from '../shared/errors.js';
 // ─── 常量 ──────────────────────────────────────────────────────────────────────
 const CHAT_STORAGE_PREFIX = 'donichannel_chat_v1_';
 const MAX_MESSAGES_PER_CHANNEL = 200;
-// 同一发送者、相邻消息间隔在此时间内视为"连续消息"（可折叠头像/昵称）
-const GROUPING_THRESHOLD_MS = 5 * 60 * 1000; // 5 分钟
-
-// ─── 消息结构 ─────────────────────────────────────────────────────────────────
-/**
- * 消息对象结构：
- * {
- *   id: string,           // nanoid (不依赖外部库，用 Math.random 生成)
- *   channelId: string,
- *   senderId: string,     // participant.identity
- *   senderName: string,
- *   senderColor: string,  // 头像背景色
- *   senderPreset: string, // emoji 预设
- *   senderAvatarUrl: string|null, // base64 图片头像（可选）
- *   content: string,      // 原始文本（支持 markdown 语法 & Discord emoji :name:）
- *   timestamp: number,    // Date.now()
- *   reactions: Record<string, string[]>, // emoji -> [senderId, ...]
- *   isSelf: boolean,
- * }
- */
+// 同一发送者、相邻消息间隔在此时间内视为“连续消息”（可折叠头像/昵称）
+const GROUPING_THRESHOLD_MS = 5 * 60 * 1000;
 
 // ─── 工具函数 ─────────────────────────────────────────────────────────────────
 function generateId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  return 'local_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
 }
 
 function storageKey(channelId) {
@@ -43,6 +25,56 @@ function safeJsonParse(raw) {
   }
 }
 
+function normalizeChannelId(channelId) {
+  return String(channelId || 'lobby').trim() || 'lobby';
+}
+
+function normalizeMessage(raw = {}, fallbackChannelId = 'lobby', selfId = '') {
+  const channelId = normalizeChannelId(raw.channelId || fallbackChannelId);
+  const id = String(raw.id || raw.serverMessageId || raw.clientMessageId || generateId());
+  const senderId = String(raw.senderId || raw.senderUserId || raw.userId || '');
+
+  return {
+    id,
+    clientMessageId: raw.clientMessageId || id,
+    serverMessageId: raw.serverMessageId || raw.id || id,
+    channelId,
+    senderId,
+    senderUserId: raw.senderUserId || senderId,
+    senderIdentity: raw.senderIdentity || raw.identity || '',
+    senderName: raw.senderName || raw.displayName || '未知用户',
+    senderColor: raw.senderColor || raw.avatarColor || '#5865f2',
+    senderPreset: raw.senderPreset || raw.avatarPreset || '',
+    senderAvatarUrl: raw.senderAvatarUrl ?? raw.avatarUrl ?? null,
+    content: raw.content || '',
+    timestamp: Number(raw.timestamp || Date.now()),
+    reactions: raw.reactions && typeof raw.reactions === 'object' ? raw.reactions : {},
+    isSelf: raw.isSelf !== undefined ? !!raw.isSelf : (!!selfId && senderId === selfId),
+    status: raw.status || 'sent',
+  };
+}
+
+function serializeMessage(m) {
+  return {
+    id: m.id,
+    clientMessageId: m.clientMessageId,
+    serverMessageId: m.serverMessageId,
+    channelId: m.channelId,
+    senderId: m.senderId,
+    senderUserId: m.senderUserId,
+    senderIdentity: m.senderIdentity,
+    senderName: m.senderName,
+    senderColor: m.senderColor,
+    senderPreset: m.senderPreset,
+    senderAvatarUrl: m.senderAvatarUrl ?? null,
+    content: m.content,
+    timestamp: m.timestamp,
+    reactions: m.reactions ?? {},
+    isSelf: !!m.isSelf,
+    status: m.status || 'sent',
+  };
+}
+
 // ─── Store ────────────────────────────────────────────────────────────────────
 export const chatStore = reactive({
   /** 当前频道 ID */
@@ -51,184 +83,202 @@ export const chatStore = reactive({
   messages: [],
   /** 内存缓存：其他频道已加载的消息（避免重复读取 localStorage） */
   _cache: {},
+  /** Reaction 可能先于消息到达；先暂存，等消息出现后再补应用 */
+  _pendingReactions: {},
 });
 
 // ─── 持久化 ───────────────────────────────────────────────────────────────────
-/** 将当前频道的消息保存到 localStorage。 */
-function persistCurrentChannel() {
-  const channelId = chatStore.currentChannelId;
-  if (!channelId) return;
+function persistChannel(channelId) {
+  const cleanId = normalizeChannelId(channelId);
+  const list = cleanId === chatStore.currentChannelId
+    ? chatStore.messages
+    : (chatStore._cache[cleanId] || []);
 
   try {
-    // 只保存可序列化字段（过滤掉运行时临时字段）
-    const toSave = chatStore.messages.map((m) => ({
-      id: m.id,
-      channelId: m.channelId,
-      senderId: m.senderId,
-      senderName: m.senderName,
-      senderColor: m.senderColor,
-      senderPreset: m.senderPreset,
-      senderAvatarUrl: m.senderAvatarUrl ?? null,
-      content: m.content,
-      timestamp: m.timestamp,
-      reactions: m.reactions ?? {},
-      isSelf: m.isSelf,
-    }));
-    localStorage.setItem(storageKey(channelId), JSON.stringify(toSave));
+    localStorage.setItem(storageKey(cleanId), JSON.stringify(list.map(serializeMessage)));
   } catch (e) {
-    // localStorage 写满时静默失败，不影响运行时
-    // eslint-disable-next-line no-console
     console.warn('[chatStore] 持久化失败', e);
   }
 }
 
-/** 从 localStorage 加载指定频道的消息。 */
+function persistCurrentChannel() {
+  if (!chatStore.currentChannelId) return;
+  persistChannel(chatStore.currentChannelId);
+}
+
 function loadFromStorage(channelId) {
-  const raw = localStorage.getItem(storageKey(channelId));
+  const cleanId = normalizeChannelId(channelId);
+  const raw = localStorage.getItem(storageKey(cleanId));
   const parsed = safeJsonParse(raw);
   if (!Array.isArray(parsed)) return [];
+  return parsed.map((m) => normalizeMessage(m, cleanId));
+}
 
-  // 兼容旧版消息结构，补全缺失字段
-  return parsed.map((m) => ({
-    id: m.id || generateId(),
-    channelId: m.channelId || channelId,
-    senderId: m.senderId || '',
-    senderName: m.senderName || '未知用户',
-    senderColor: m.senderColor || '#5865f2',
-    senderPreset: m.senderPreset || '',
-    senderAvatarUrl: m.senderAvatarUrl ?? null,
-    content: m.content || '',
-    timestamp: m.timestamp || Date.now(),
-    reactions: m.reactions && typeof m.reactions === 'object' ? m.reactions : {},
-    isSelf: !!m.isSelf,
-  }));
+function getChannelList(channelId) {
+  const cleanId = normalizeChannelId(channelId);
+  if (chatStore.currentChannelId === cleanId) return chatStore.messages;
+  if (!chatStore._cache[cleanId]) chatStore._cache[cleanId] = loadFromStorage(cleanId);
+  return chatStore._cache[cleanId];
+}
+
+function findMessageInList(list, idOrClientId) {
+  return list.find((m) => m.id === idOrClientId || m.clientMessageId === idOrClientId || m.serverMessageId === idOrClientId);
+}
+
+function findMessageAnywhere(idOrClientId) {
+  if (!idOrClientId) return null;
+
+  let msg = findMessageInList(chatStore.messages, idOrClientId);
+  if (msg) return { msg, channelId: chatStore.currentChannelId };
+
+  for (const [channelId, list] of Object.entries(chatStore._cache)) {
+    msg = findMessageInList(list, idOrClientId);
+    if (msg) return { msg, channelId };
+  }
+
+  return null;
+}
+
+function applyPendingReactionForMessage(message) {
+  if (!message?.id) return;
+  const pending = chatStore._pendingReactions[message.id] || chatStore._pendingReactions[message.serverMessageId] || chatStore._pendingReactions[message.clientMessageId];
+  if (!pending) return;
+
+  message.reactions = pending.reactions || {};
+  delete chatStore._pendingReactions[message.id];
+  if (message.serverMessageId) delete chatStore._pendingReactions[message.serverMessageId];
+  if (message.clientMessageId) delete chatStore._pendingReactions[message.clientMessageId];
+}
+
+function upsertMessageToChannel(message, channelId) {
+  const cleanId = normalizeChannelId(channelId || message.channelId);
+  const list = getChannelList(cleanId);
+  const existing = findMessageInList(list, message.id) || findMessageInList(list, message.clientMessageId);
+
+  if (existing) {
+    Object.assign(existing, {
+      ...message,
+      reactions: message.reactions || existing.reactions || {},
+      status: message.status || existing.status || 'sent',
+    });
+    applyPendingReactionForMessage(existing);
+    persistChannel(cleanId);
+    return existing;
+  }
+
+  applyPendingReactionForMessage(message);
+  list.push(message);
+  list.sort((a, b) => a.timestamp - b.timestamp);
+
+  if (list.length > MAX_MESSAGES_PER_CHANNEL) {
+    list.splice(0, list.length - MAX_MESSAGES_PER_CHANNEL);
+  }
+
+  persistChannel(cleanId);
+  return message;
 }
 
 // ─── 公开 API ─────────────────────────────────────────────────────────────────
 
-/**
- * 切换到指定频道，加载该频道的历史消息。
- * @param {string} channelId
- */
 export function switchChatChannel(channelId) {
-  const cleanId = String(channelId || 'lobby').trim();
+  const cleanId = normalizeChannelId(channelId);
 
-  // 保存上一个频道
   if (chatStore.currentChannelId) {
     chatStore._cache[chatStore.currentChannelId] = [...chatStore.messages];
   }
 
   chatStore.currentChannelId = cleanId;
 
-  // 优先从内存缓存取，否则从 localStorage 加载
   if (chatStore._cache[cleanId]) {
     chatStore.messages = chatStore._cache[cleanId];
   } else {
     chatStore.messages = loadFromStorage(cleanId);
     chatStore._cache[cleanId] = chatStore.messages;
   }
-}
 
-/**
- * 向当前频道添加一条消息。
- * @param {Object} msgData - 消息数据（不含 id/timestamp）
- */
-export function addChatMessage(msgData) {
-  const channelId = chatStore.currentChannelId || 'lobby';
-  const msg = {
-    id: msgData.id || generateId(),
-    channelId,
-    senderId: msgData.senderId || '',
-    senderName: msgData.senderName || '未知用户',
-    senderColor: msgData.senderColor || '#5865f2',
-    senderPreset: msgData.senderPreset || '',
-    senderAvatarUrl: msgData.senderAvatarUrl ?? null,
-    content: msgData.content || '',
-    timestamp: msgData.timestamp || Date.now(),
-    reactions: {},
-    isSelf: !!msgData.isSelf,
-  };
-
-  chatStore.messages.push(msg);
-
-  // 超过上限时移除最旧的消息
-  if (chatStore.messages.length > MAX_MESSAGES_PER_CHANNEL) {
-    chatStore.messages.splice(0, chatStore.messages.length - MAX_MESSAGES_PER_CHANNEL);
-  }
-
+  for (const msg of chatStore.messages) applyPendingReactionForMessage(msg);
   persistCurrentChannel();
-  return msg;  // 返回消息对象，供调用方转发到服务器
 }
 
-/**
- * 对某条消息添加或取消 emoji reaction。
- * @param {string} messageId
- * @param {string} emoji
- * @param {string} senderId
- */
+export function addChatMessage(msgData) {
+  const channelId = normalizeChannelId(msgData.channelId || chatStore.currentChannelId || 'lobby');
+  const localId = msgData.id || msgData.clientMessageId || generateId();
+  const msg = normalizeMessage({
+    ...msgData,
+    id: localId,
+    clientMessageId: msgData.clientMessageId || localId,
+    channelId,
+    status: msgData.status || 'sending',
+  }, channelId);
+
+  return upsertMessageToChannel(msg, channelId);
+}
+
+export function markMessageSent({ clientMessageId, serverMessageId, messageId }) {
+  const found = findMessageAnywhere(clientMessageId || messageId || serverMessageId);
+  if (!found) return;
+  found.msg.status = 'sent';
+  if (serverMessageId) found.msg.serverMessageId = serverMessageId;
+  if (messageId) found.msg.id = messageId;
+  persistChannel(found.channelId);
+}
+
+export function markMessageFailed(clientMessageId) {
+  const found = findMessageAnywhere(clientMessageId);
+  if (!found) return;
+  found.msg.status = 'failed';
+  persistChannel(found.channelId);
+}
+
 export function toggleReaction(messageId, emoji, senderId) {
-  const msg = chatStore.messages.find((m) => m.id === messageId);
+  const found = findMessageAnywhere(messageId);
+  const msg = found?.msg;
   if (!msg) return;
 
-  if (!msg.reactions[emoji]) {
-    msg.reactions[emoji] = [];
-  }
+  if (!msg.reactions[emoji]) msg.reactions[emoji] = [];
 
   const idx = msg.reactions[emoji].indexOf(senderId);
   if (idx >= 0) {
     msg.reactions[emoji].splice(idx, 1);
-    if (msg.reactions[emoji].length === 0) {
-      delete msg.reactions[emoji];
-    }
+    if (msg.reactions[emoji].length === 0) delete msg.reactions[emoji];
   } else {
     msg.reactions[emoji].push(senderId);
   }
 
-  persistCurrentChannel();
+  persistChannel(found.channelId);
 }
 
-
-
-/** 更新历史聊天记录中的发送者头像（当某个用户修改了资料时） */
 export function updateChatAvatars(identity, avatarColor, avatarPreset, avatarUrl) {
   if (!identity) return;
-  let changed = false;
-  
-  // 更新当前频道内存中的消息
+  const ids = new Set([identity]);
+  let changedCurrent = false;
+
   for (const msg of chatStore.messages) {
-    if (msg.senderId === identity) {
+    if (ids.has(msg.senderId) || ids.has(msg.senderUserId) || ids.has(msg.senderIdentity)) {
       msg.senderColor = avatarColor;
       msg.senderPreset = avatarPreset;
       msg.senderAvatarUrl = avatarUrl;
-      changed = true;
+      changedCurrent = true;
     }
   }
-  if (changed) persistCurrentChannel();
+  if (changedCurrent) persistCurrentChannel();
 
-  // 更新缓存中的消息
   for (const channelId in chatStore._cache) {
     let cacheChanged = false;
     for (const msg of chatStore._cache[channelId]) {
-      if (msg.senderId === identity) {
+      if (ids.has(msg.senderId) || ids.has(msg.senderUserId) || ids.has(msg.senderIdentity)) {
         msg.senderColor = avatarColor;
         msg.senderPreset = avatarPreset;
         msg.senderAvatarUrl = avatarUrl;
         cacheChanged = true;
       }
     }
-    // 如果需要持久化缓存，可以将缓存覆盖回 localStorage
-    if (cacheChanged) {
-      localStorage.setItem(storageKey(channelId), JSON.stringify(chatStore._cache[channelId]));
-    }
+    if (cacheChanged) persistChannel(channelId);
   }
 }
 
-/**
- * 清空指定频道（或当前频道）的消息。
- * @param {string|null} channelId
- */
 export function clearChatChannel(channelId) {
-  const cleanId = String(channelId || chatStore.currentChannelId || 'lobby').trim();
+  const cleanId = normalizeChannelId(channelId || chatStore.currentChannelId || 'lobby');
 
   if (chatStore.currentChannelId === cleanId) {
     chatStore.messages = [];
@@ -240,25 +290,12 @@ export function clearChatChannel(channelId) {
   clearChatHistory(cleanId).catch(() => {});
 }
 
-/**
- * 判断两条消息是否应该折叠（连续消息分组）。
- * 相同发送者 + 时间差在阈值内 -> 折叠。
- * @param {Object} prevMsg
- * @param {Object} currMsg
- * @returns {boolean}
- */
 export function shouldGroupWithPrev(prevMsg, currMsg) {
   if (!prevMsg || !currMsg) return false;
   if (prevMsg.senderId !== currMsg.senderId) return false;
   return currMsg.timestamp - prevMsg.timestamp < GROUPING_THRESHOLD_MS;
 }
 
-/**
- * 从服务器加载频道历史记录，合并到当前消息列表（去重）。
- * 在 switchChatChannel 之后调用，让新加入的用户也能看到历史。
- * @param {string} channelId
- * @param {{ limit?: number }} [opts]
- */
 export async function loadServerHistory(channelId, { limit = 50 } = {}) {
   const cleanId = String(channelId || '').trim();
   if (!cleanId) return;
@@ -267,66 +304,50 @@ export async function loadServerHistory(channelId, { limit = 50 } = {}) {
     const { messages: serverMsgs } = await fetchChatHistory(cleanId, { limit });
     if (!Array.isArray(serverMsgs) || serverMsgs.length === 0) return;
 
-    // 当前频道可能已切换，只处理当前频道
-    if (chatStore.currentChannelId !== cleanId) return;
+    const targetList = getChannelList(cleanId);
+    const selfId = '';
 
-    // 合并：去掉本地已有的（按 id 去重），服务器消息插到头部
-    const localIds = new Set(chatStore.messages.map((m) => m.id));
-    const newMsgs = serverMsgs
-      .filter((m) => !localIds.has(m.id))
-      .map((m) => ({
-        ...m,
-        // isSelf 由客户端根据自己的 senderId 判断（服务器统一返回 false）
-        isSelf: m.isSelf || false,
-        reactions: m.reactions || {},
-      }));
+    for (const raw of serverMsgs) {
+      const msg = normalizeMessage(raw, cleanId, selfId);
+      upsertMessageToChannel({ ...msg, status: 'sent' }, cleanId);
+    }
 
-    if (newMsgs.length === 0) return;
+    targetList.sort((a, b) => a.timestamp - b.timestamp);
+    if (targetList.length > MAX_MESSAGES_PER_CHANNEL) {
+      targetList.splice(0, targetList.length - MAX_MESSAGES_PER_CHANNEL);
+    }
 
-    // 将服务器旧消息插入到本地消息列表前面，按时间戳排序
-    chatStore.messages = [...newMsgs, ...chatStore.messages]
-      .sort((a, b) => a.timestamp - b.timestamp)
-      .slice(-MAX_MESSAGES_PER_CHANNEL);
-
-    // 更新缓存和持久化
-    chatStore._cache[cleanId] = chatStore.messages;
-    persistCurrentChannel();
+    if (chatStore.currentChannelId === cleanId) {
+      chatStore.messages = targetList;
+    }
+    persistChannel(cleanId);
   } catch (e) {
     logError('chatStore/loadServerHistory 加载服务器历史失败', e, 'warn');
   }
 }
 
-/**
- * 将来自服务器广播（Presence WebSocket chat_message）的消息写入 chatStore。
- * 用于接收其他人发送的、从服务器推送过来的消息（避免重复渲染）。
- * @param {Object} serverMsg
- * @param {string} selfIdentity - 当前用户的 identity，用于标记 isSelf
- */
-export function applyServerChatMessage(serverMsg, selfIdentity) {
+export function applyServerChatMessage(serverMsg, selfIdentityOrUserId = '') {
   if (!serverMsg || !serverMsg.channelId) return;
-
-  // 只处理当前频道的消息
-  if (serverMsg.channelId !== chatStore.currentChannelId) return;
-
-  // 去重：已存在的消息不重复添加
-  if (chatStore.messages.some((m) => m.id === serverMsg.id)) return;
-
-  addChatMessage({
-    ...serverMsg,
-    isSelf: serverMsg.senderId === selfIdentity,
-  });
+  const cleanId = normalizeChannelId(serverMsg.channelId);
+  const msg = normalizeMessage(serverMsg, cleanId, selfIdentityOrUserId);
+  msg.isSelf = msg.isSelf || (!!selfIdentityOrUserId && (msg.senderId === selfIdentityOrUserId || msg.senderUserId === selfIdentityOrUserId || msg.senderIdentity === selfIdentityOrUserId));
+  msg.status = 'sent';
+  upsertMessageToChannel(msg, cleanId);
 }
 
-/**
- * 将来自服务器广播的 reaction_update 应用到本地消息。
- * @param {{ messageId, reactions }} update
- */
 export function applyServerReactionUpdate(update) {
   if (!update || !update.messageId) return;
 
-  const msg = chatStore.messages.find((m) => m.id === update.messageId);
-  if (!msg) return;
+  const found = findMessageAnywhere(update.messageId);
+  if (!found) {
+    chatStore._pendingReactions[update.messageId] = {
+      channelId: update.channelId || '',
+      reactions: update.reactions || {},
+      updatedAt: Date.now(),
+    };
+    return;
+  }
 
-  msg.reactions = update.reactions || {};
-  persistCurrentChannel();
+  found.msg.reactions = update.reactions || {};
+  persistChannel(found.channelId);
 }
