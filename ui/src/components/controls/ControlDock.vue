@@ -23,6 +23,7 @@ const displayName = computed(() => getSelfDisplayName('未连接大厅'));
         :name="displayName"
         :color="profileStore.avatarColor"
         :preset="profileStore.avatarPreset"
+        :avatarUrl="profileStore.avatarUrl"
         size="md"
         online
       />

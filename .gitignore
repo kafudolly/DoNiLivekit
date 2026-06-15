@@ -171,6 +171,9 @@ rooms.db
 *.db
 test_presence.py
 
+# 用户上传文件目录（运行时生成）
+uploads/
+
 # PyInstaller
 build/
 dist/

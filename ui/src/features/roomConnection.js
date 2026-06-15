@@ -158,8 +158,10 @@ export function createRoomConnectionFeature(context) {
         document.getElementById('screen-res').disabled = true;
         document.getElementById('screen-fps').disabled = true;
         document.getElementById('screen-bitrate').disabled = true;
-        document.getElementById('chat-input').disabled = true;
-        document.getElementById('btn-send').disabled = true;
+        const chatInputEl = document.getElementById('chat-input');
+        if (chatInputEl) chatInputEl.disabled = true;
+        const btnSendEl = document.getElementById('btn-send');
+        if (btnSendEl) btnSendEl.disabled = true;
         document.getElementById('btn-app-audio').disabled = true;
 
         context.rustMic.setMicOn(false);
@@ -201,9 +203,14 @@ export function createRoomConnectionFeature(context) {
         document.getElementById('header').innerText = '# 🏛️ DoNiChannel 电竞大厅（选择左侧语音分组）';
 
         try {
+            const { profileStore } = await import('../stores/profileStore.js');
             await context.presence.connect({
                 apiBase: serverConfig.apiBase,
                 username,
+                identity: profileStore.userId,
+                avatarColor: profileStore.avatarColor,
+                avatarPreset: profileStore.avatarPreset,
+                avatarUrl: profileStore.avatarUrl,
             });
             context.presence.requestSnapshot();
         } catch (err) {

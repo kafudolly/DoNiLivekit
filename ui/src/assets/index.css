@@ -468,8 +468,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .screen-settings-popup {
     position: absolute;
     bottom: calc(100% + 14px); /* 悬浮在按钮上方 */
-    left: 50%;
-    transform: translateX(-50%) translateY(10px);
+    left: -10px;
+    transform: translateY(10px);
     width: 230px;
     background-color: #111214;
     border: 1px solid #3b3d44;
@@ -2020,10 +2020,10 @@ button.primary-btn {
     user-select: none;
 }
 
-.base-avatar.size-sm { --avatar-size: 28px; }
-.base-avatar.size-md { --avatar-size: 38px; }
-.base-avatar.size-lg { --avatar-size: 48px; }
-.base-avatar.size-xl { --avatar-size: 64px; }
+.base-avatar.size-sm { --avatar-size: 32px; }
+.base-avatar.size-md { --avatar-size: 42px; }
+.base-avatar.size-lg { --avatar-size: 56px; }
+.base-avatar.size-xl { --avatar-size: 88px; }
 
 .base-avatar-text {
     font-size: calc(var(--avatar-size) * 0.38);
@@ -3761,4 +3761,37 @@ body,
         left: 18px;
         width: auto;
     }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BaseAvatar — 图片头像支持
+═══════════════════════════════════════════════════════════════════ */
+.base-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    display: block;
+}
+
+/* 图片头像时移除渐变背景 */
+.base-avatar:has(.base-avatar-img) {
+    background: #36393f;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10), 0 4px 10px rgba(0,0,0,0.2);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Vue ChatPanel — 新聊天面板布局
+   .chat-panel-vue 替代旧的 #chat-panel / .chat-sidebar
+═══════════════════════════════════════════════════════════════════ */
+.chat-panel-vue {
+    width: 300px;
+    flex-shrink: 0;
+    position: relative;
+    overflow: visible;
+}
+
+/* 兼容：如果旧 #chat-panel 仍存在，隐藏它（避免双重渲染） */
+aside#chat-panel.chat-sidebar {
+    display: none !important;
 }

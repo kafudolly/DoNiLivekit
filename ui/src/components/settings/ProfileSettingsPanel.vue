@@ -9,7 +9,32 @@ import {
   updateAvatarPreset,
   updateDisplayName,
   updateStatusText,
+  uploadAvatarImage,
 } from '../../stores/profileStore.js';
+import { ref } from 'vue';
+
+const fileInput = ref(null);
+const isUploading = ref(false);
+
+const triggerUpload = () => {
+  if (fileInput.value) {
+    fileInput.value.click();
+  }
+};
+
+const handleFileChange = async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  isUploading.value = true;
+  await uploadAvatarImage(file);
+  isUploading.value = false;
+  
+  // reset input so the same file can be uploaded again if needed
+  if (fileInput.value) {
+    fileInput.value.value = '';
+  }
+};
 </script>
 
 <template>
@@ -17,16 +42,37 @@ import {
     <div class="settings-section-title">我的资料</div>
 
     <div class="profile-preview-card">
-      <BaseAvatar
-        :name="profileStore.displayName || 'rain'"
-        :color="profileStore.avatarColor"
-        :preset="profileStore.avatarPreset"
-        size="xl"
-        online
-      />
+      <div class="profile-avatar-wrapper" style="position: relative; display: inline-block;">
+        <BaseAvatar
+          :name="profileStore.displayName || 'rain'"
+          :color="profileStore.avatarColor"
+          :preset="profileStore.avatarPreset"
+          :avatarUrl="profileStore.avatarUrl"
+          size="xl"
+          online
+        />
+        <button 
+          type="button" 
+          class="avatar-upload-btn" 
+          @click="triggerUpload"
+          :disabled="isUploading"
+          style="position: absolute; bottom: -5px; right: -5px; background: var(--bg-modifier-hover); border: none; border-radius: 50%; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.2);"
+          title="上传自定义头像"
+        >
+          📷
+        </button>
+        <input 
+          type="file" 
+          ref="fileInput" 
+          accept="image/*" 
+          style="display: none;"
+          @change="handleFileChange"
+        >
+      </div>
       <div class="profile-preview-text">
         <div class="profile-preview-name">{{ profileStore.displayName || '未命名用户' }}</div>
         <div class="profile-preview-subtitle">资料会保存在本机，下次打开自动恢复。</div>
+        <div v-if="isUploading" style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">正在上传...</div>
       </div>
     </div>
 

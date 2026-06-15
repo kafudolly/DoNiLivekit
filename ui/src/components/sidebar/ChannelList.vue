@@ -90,7 +90,11 @@ function getMemberAvatarColor(member) {
 }
 
 function getMemberAvatarPreset(member) {
-  return isSelf(member) ? profileStore.avatarPreset : '';
+  return isSelf(member) ? profileStore.avatarPreset : member.avatarPreset;
+}
+
+function getMemberAvatarUrl(member) {
+  return isSelf(member) ? profileStore.avatarUrl : member.avatarUrl;
 }
 
 function getVolumeCacheKey(member) {
@@ -202,6 +206,7 @@ function handleSwitchChannel(channel) {
                 :name="getMemberName(member)"
                 :color="getMemberAvatarColor(member)"
                 :preset="getMemberAvatarPreset(member)"
+                :avatarUrl="getMemberAvatarUrl(member)"
                 size="sm"
                 online
               />

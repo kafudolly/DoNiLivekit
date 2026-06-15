@@ -8,6 +8,10 @@ import {
 import { sanitizeText } from '../shared/text.js';
 import { logError } from '../shared/errors.js';
 import { appStore, markAppBooted, syncFromRuntimeSnapshot, setLastError } from '../stores/appStore.js';
+import { profileStore } from '../stores/profileStore.js';
+import { watch } from 'vue';
+import { switchChatChannel, loadServerHistory, applyServerChatMessage, applyServerReactionUpdate, updateChatAvatars } from '../stores/chatStore.js';
+import { setApiBase } from '../shared/apiClient.js';
 import {
     updateMicList as updateMicListFromModule,
     switchMic as switchMicFromModule,
@@ -53,9 +57,44 @@ const presenceClient = createPresenceClient({
     logError,
     onMessage: (message) => {
         roomConnectionFeature?.applyPresenceMessage?.(message);
+
+        // 服务器推送的聊天消息广播（其他人发送的）
+        if (message.type === 'chat_message' && message.message) {
+            const selfId = presenceClient.getIdentity?.() || '';
+            applyServerChatMessage(message.message, selfId);
+        }
+
+        // 服务器推送的 reaction 更新
+        if (message.type === 'reaction_update') {
+            applyServerReactionUpdate(message);
+        }
+
+        // 有人更新了 profile
+        if (message.type === 'profile_updated') {
+            updateChatAvatars(message.identity, message.avatarColor, message.avatarPreset, message.avatarUrl);
+        }
+
+        // 收到快照时，全量更新在线用户的头像到本地聊天记录缓存
+        if (message.type === 'presence_snapshot' && message.participants) {
+            for (const p of Object.values(message.participants)) {
+                updateChatAvatars(p.identity, p.avatarColor, p.avatarPreset, p.avatarUrl);
+            }
+        }
+
         requestStoreSync();
     },
 });
+
+watch(
+    () => [profileStore.avatarColor, profileStore.avatarPreset, profileStore.avatarUrl],
+    ([avatarColor, avatarPreset, avatarUrl]) => {
+        if (presenceClient.isConnected()) {
+            presenceClient.updateProfile({ avatarColor, avatarPreset, avatarUrl });
+        }
+        // 当自己更新资料时，也需要同步更新本地聊天记录中的自己发送的消息头像
+        updateChatAvatars(presenceClient.getIdentity?.() || profileStore.userId, avatarColor, avatarPreset, avatarUrl);
+    }
+);
 
 /** 将远端成员音量偏好写回 localStorage。 */
 function saveUserVolumesToStorage() {
@@ -267,8 +306,8 @@ function showLocalScreenPreview(track) { return screenShareFeature.showLocalScre
 function getLocalScreenPublication() { return screenShareFeature.getLocalScreenPublication(); }
 function hasPublishedScreenAudioTrack() { return screenShareFeature.hasPublishedScreenAudioTrack(); }
 
-function sendChatMessage() { return chatFeature.sendChatMessage(); }
-function renderChatMessage(sender, text, isSelf) { return chatFeature.renderChatMessage(sender, text, isSelf); }
+function sendChatMessage(text) { return chatFeature.sendChatMessage(text); }
+function renderChatMessage(msgDataOrSender, text, isSelf) { return chatFeature.renderChatMessage(msgDataOrSender, text, isSelf); }
 
 function addRemoteGainNode(identity, source, track, audioEl) { return remoteAudioFeature.addRemoteGainNode(identity, source, track, audioEl); }
 function clearRemoteGainNodes() { return remoteAudioFeature.clearRemoteGainNodes(); }
@@ -301,9 +340,35 @@ function startRoomPolling() { return roomConnectionFeature.startRoomPolling(); }
 function stopRoomPolling() { return roomConnectionFeature.stopRoomPolling(); }
 function createChannel() { return roomConnectionFeature.createChannel(); }
 function resetRoomUIAfterDisconnect() { return roomConnectionFeature.resetRoomUIAfterDisconnect(); }
-function joinRoom(options) { return afterAction(roomConnectionFeature.joinRoom(options)); }
-function switchChannel(roomName) { return afterAction(roomConnectionFeature.switchChannel(roomName)); }
-function connectToChannel(targetRoomName, options) { return afterAction(roomConnectionFeature.connectToChannel(targetRoomName, options)); }
+function joinRoom(options) {
+    // 进入大厅时记录 apiBase，供后续 REST 调用使用
+    try {
+        const cfg = roomConnectionFeature.getServerConfig?.();
+        const base = cfg?.apiBase || (() => {
+            const ip = appStore.connection.serverIp || DEFAULT_SERVER_IP;
+            const host = ip.includes(':') ? ip.split(':')[0] : ip;
+            const port = ip.includes(':') ? ip.split(':')[1] : '5000';
+            return `http://${host}:${port}`;
+        })();
+        if (base) setApiBase(base);
+    } catch (_) {}
+    return afterAction(roomConnectionFeature.joinRoom(options));
+}
+function switchChannel(roomName) {
+    // 切换频道时，先切换本地频道记录，再从服务器加载历史
+    if (roomName) {
+        switchChatChannel(roomName);
+        loadServerHistory(roomName).catch(() => {});
+    }
+    return afterAction(roomConnectionFeature.switchChannel(roomName));
+}
+function connectToChannel(targetRoomName, options) {
+    if (targetRoomName) {
+        switchChatChannel(targetRoomName);
+        loadServerHistory(targetRoomName).catch(() => {});
+    }
+    return afterAction(roomConnectionFeature.connectToChannel(targetRoomName, options));
+}
 function leaveRoom() { return afterAction(roomConnectionFeature.leaveRoom()); }
 
 

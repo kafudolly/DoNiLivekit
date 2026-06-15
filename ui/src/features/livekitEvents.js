@@ -246,11 +246,10 @@ export function createLivekitEventsFeature(context) {
             try {
                 const text = new TextDecoder().decode(payload);
                 const data = JSON.parse(text);
-                if (data.msg) {
-                    context.renderChatMessage(participant ? (participant.name || participant.identity) : '未知', data.msg, false);
-                }
+                // 聊天消息已全部通过 Presence WebSocket (chat_message) 传输并处理
+                // 此处不再处理 data.msg 避免重复和产生假 ID 导致无法点赞
             } catch (e) {
-                logError('livekitEvents/DataReceived 解析聊天消息失败', e);
+                logError('livekitEvents/DataReceived 解析数据失败', e);
             }
         });
     }

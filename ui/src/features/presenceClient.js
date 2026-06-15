@@ -45,9 +45,7 @@ export function createPresenceClient({ logError, onMessage }) {
     }
 
     /** 连接 Presence WebSocket。 */
-    async function connect({ apiBase, username }) {
-        const cleanName = String(username || '访客').trim() || '访客';
-
+    async function connect({ apiBase, username, identity: propIdentity, avatarColor, avatarPreset, avatarUrl }) {
         if (
             socket &&
             (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
@@ -55,15 +53,17 @@ export function createPresenceClient({ logError, onMessage }) {
             return;
         }
 
+        const cleanName = String(username || '访客').trim();
         displayName = cleanName;
-        identity = identity || sessionStorage.getItem('lk_presence_identity') || createIdentity(cleanName);
+        // 优先使用传入的 identity，其次 sessionStorage，最后自动生成
+        identity = propIdentity || sessionStorage.getItem('lk_presence_identity') || createIdentity(cleanName);
         sessionStorage.setItem('lk_presence_identity', identity);
 
         lastApiBase = apiBase;
         shouldReconnect = true;
 
         const wsBase = toWsBase(apiBase);
-        const url = `${wsBase}/ws/presence?user=${encodeURIComponent(displayName)}&identity=${encodeURIComponent(identity)}`;
+        const url = `${wsBase}/ws/presence?user=${encodeURIComponent(displayName)}&identity=${encodeURIComponent(identity)}&avatarColor=${encodeURIComponent(avatarColor || '#5865f2')}&avatarPreset=${encodeURIComponent(avatarPreset || '')}&avatarUrl=${encodeURIComponent(avatarUrl || '')}`;
 
         await new Promise((resolve, reject) => {
             socket = new WebSocket(url);
@@ -163,6 +163,16 @@ export function createPresenceClient({ logError, onMessage }) {
         return !!socket && socket.readyState === WebSocket.OPEN;
     }
 
+    /** 更新并广播当前用户的个人资料 */
+    function updateProfile({ avatarColor, avatarPreset, avatarUrl }) {
+        return send({
+            type: 'update_profile',
+            avatarColor,
+            avatarPreset,
+            avatarUrl: avatarUrl || '',
+        });
+    }
+
     return {
         connect,
         disconnect,
@@ -171,5 +181,6 @@ export function createPresenceClient({ logError, onMessage }) {
         leaveChannel,
         getIdentity,
         isConnected,
+        updateProfile,
     };
 }

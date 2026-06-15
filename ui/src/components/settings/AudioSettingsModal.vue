@@ -18,7 +18,6 @@ const settingsTabs = [
   { id: 'profile', icon: '👤', title: '我的资料', desc: '头像、昵称、状态' },
   { id: 'devices', icon: '🎧', title: '音频设备', desc: '麦克风与扬声器' },
   { id: 'mic', icon: '🎙️', title: '麦克风处理', desc: '阈值、增益、降噪' },
-  { id: 'appearance', icon: '🎨', title: '外观', desc: '主题与界面偏好' },
   { id: 'about', icon: 'ℹ️', title: '关于', desc: '版本和使用建议' },
 ];
 
@@ -156,38 +155,6 @@ function chooseTheme(themeId) {
                 >
 
                 <div class="settings-range-note">增益越高声音越大，但也更容易触发限幅和失真。</div>
-              </div>
-            </section>
-
-            <section v-show="activeTab === 'appearance'" class="settings-section settings-page-section">
-              <div class="settings-section-title">外观偏好</div>
-              <p class="settings-section-desc">主题系统已经接入 CSS 变量。现在可以切换基础主题，后续会继续扩展紧凑模式、动效和真实毛玻璃强度。</p>
-
-              <div class="theme-choice-grid">
-                <button
-                  v-for="theme in themes"
-                  :key="theme.id"
-                  type="button"
-                  class="theme-choice-card"
-                  :class="[`theme-choice-${theme.id}`, { active: activeThemeId === theme.id }]"
-                  @click="chooseTheme(theme.id)"
-                >
-                  <span class="theme-choice-preview">
-                    <i></i><i></i><i></i>
-                  </span>
-                  <strong>{{ theme.name }}</strong>
-                  <em>{{ theme.desc }}</em>
-                </button>
-              </div>
-
-              <div class="settings-tip-card">
-                <strong>主舞台状态面板</strong>
-                <span>Stage 26 已加入本地连接质量统计。延迟、丢包和码率来自客户端 WebRTC getStats，不会额外轮询后端。</span>
-              </div>
-
-              <div class="settings-tip-card">
-                <strong>主题说明</strong>
-                <span>主题仅影响前端视觉层，不会改动 LiveKit、Rust 麦克风、Presence 或音频链路。</span>
               </div>
             </section>
 

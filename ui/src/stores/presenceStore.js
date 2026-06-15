@@ -56,6 +56,9 @@ function normalizeMember(member) {
     return {
         identity: identity || displayName,
         displayName: displayName || identity,
+        avatarColor: member.avatarColor,
+        avatarPreset: member.avatarPreset,
+        avatarUrl: member.avatarUrl,
     };
 }
 
@@ -157,6 +160,9 @@ function applyParticipantMoved(message) {
                 channel.members.push({
                     identity: identity || displayName,
                     displayName: displayName || identity,
+                    avatarColor: message.avatarColor,
+                    avatarPreset: message.avatarPreset,
+                    avatarUrl: message.avatarUrl,
                 });
             }
         }
@@ -169,6 +175,9 @@ function applyParticipantMoved(message) {
             identity: key,
             displayName: displayName || key,
             currentChannel: targetChannel || null,
+            avatarColor: message.avatarColor,
+            avatarPreset: message.avatarPreset,
+            avatarUrl: message.avatarUrl,
         };
     }
 }
@@ -198,7 +207,30 @@ function applyParticipantOnline(message) {
         identity: key,
         displayName: displayName || key,
         currentChannel: participant.currentChannel || null,
+        avatarColor: participant.avatarColor,
+        avatarPreset: participant.avatarPreset,
+        avatarUrl: participant.avatarUrl,
     };
+}
+
+/** 应用用户资料更新（头像颜色、预设 emoji、头像 URL）。 */
+function applyProfileUpdate(message) {
+    const identity = String(message.identity || '').trim();
+    if (identity && presenceStore.participants[identity]) {
+        presenceStore.participants[identity].avatarColor = message.avatarColor;
+        presenceStore.participants[identity].avatarPreset = message.avatarPreset;
+        presenceStore.participants[identity].avatarUrl = message.avatarUrl;
+    }
+
+    for (const channel of presenceStore.channels) {
+        for (const member of channel.members) {
+            if (member.identity === identity) {
+                member.avatarColor = message.avatarColor;
+                member.avatarPreset = message.avatarPreset;
+                member.avatarUrl = message.avatarUrl;
+            }
+        }
+    }
 }
 
 /** 统一处理 Presence 消息；ChannelList.vue 会自动响应 presenceStore 的变化。 */
@@ -213,6 +245,10 @@ export function applyPresenceMessage(message) {
         applyParticipantOffline(message);
     } else if (message.type === 'participant_online') {
         applyParticipantOnline(message);
+    } else if (message.type === 'update_profile') {
+        applyProfileUpdate(message);
+    } else if (message.type === 'profile_updated') {
+        applyProfileUpdate(message);
     }
 
     presenceStore.lastMessageType = message.type;
